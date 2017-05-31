@@ -1,0 +1,17 @@
+sudo: false
+language: rust
+rust:
+  - stable
+  - beta
+  - nightly
+  # minimum supported version
+  - "1.13.0"
+
+matrix:
+  allow_failures:
+    - rust: nightly
+
+script:
+  - cargo build
+  - cargo test
+  - tests/run.sh

@@ -1,0 +1,33 @@
+; This design generates four clock pulses.
+
+proc @four_pulses () (i1$ %out) {
+%entry:
+	drv %out 0
+	wait %pulse0 for 10ns
+%pulse0:
+	drv %out 1
+	wait %pulse1 for 10ns
+%pulse1:
+	drv %out 0
+	wait %pulse2 for 10ns
+%pulse2:
+	drv %out 1
+	wait %pulse3 for 10ns
+%pulse3:
+	drv %out 0
+	wait %pulse4 for 10ns
+%pulse4:
+	drv %out 1
+	wait %pulse5 for 10ns
+%pulse5:
+	drv %out 0
+	wait %pulse6 for 10ns
+%pulse6:
+	drv %out 1
+	wait %pulse7 for 10ns
+%pulse7:
+	drv %out 0
+	wait %pulse8 for 10ns
+%pulse8:
+	; halt
+}
