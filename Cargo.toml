@@ -4,5 +4,5 @@ version = "0.1.0"
 authors = ["Fabian Schuiki <fschuiki@iis.ee.ethz.ch>"]
 
 [dependencies]
-llhd = { git = "https://github.com/fabianschuiki/llhd", rev = "cf82940" }
+llhd = { git = "https://github.com/fabianschuiki/llhd", rev = "b54955b" }
 clap = "2.24.2"

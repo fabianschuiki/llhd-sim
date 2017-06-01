@@ -2,6 +2,8 @@
 extern crate llhd;
 extern crate clap;
 
+pub mod builder;
+
 use std::fs::File;
 use std::io::prelude::*;
 use clap::{Arg, App};
@@ -39,4 +41,7 @@ fn main() {
 		let stdout = std::io::stdout();
 		llhd::assembly::Writer::new(&mut stdout.lock()).visit_module(&module);
 	}
+
+	// Build the simulation for this module.
+	builder::build(&module);
 }
