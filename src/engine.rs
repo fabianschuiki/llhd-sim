@@ -5,12 +5,12 @@
 
 use std::collections::{HashMap, HashSet};
 use state::{State, Instance, InstanceState, InstanceKind, SignalRef, Signal, ValueSlot, Event, TimedInstance, InstanceRef};
+use num::{BigInt, BigUint};
 use rayon::prelude::*;
 use std::borrow::BorrowMut;
-use llhd::{Value, ValueRef, ValueId, ConstKind, ConstTime, ProcessContext};
+use llhd::{ValueRef, ValueId, ConstKind, ConstTime, ConstInt, Const, ProcessContext};
 use llhd::inst::*;
 use llhd::value::BlockRef;
-use llhd::Const;
 use tracer::Tracer;
 
 
@@ -110,10 +110,10 @@ impl<'ts,'tm> Engine<'ts,'tm> {
 	/// Continue execution of one single process or entity instance, until it is
 	/// suspended by an instruction.
 	fn step_instance(&self, instance: &mut Instance) -> Vec<Event> {
-		let mut events = Vec::new();
 		match *instance.kind() {
 			InstanceKind::Process{ prok, mut next_block } => {
 				let ctx = ProcessContext::new(self.state.context(), prok);
+				let mut events = Vec::new();
 				// println!("stepping process {}, block {:?}", prok.name(), next_block.map(|b| b.name()));
 				while let Some(block) = next_block {
 					next_block = None;
@@ -131,7 +131,6 @@ impl<'ts,'tm> Engine<'ts,'tm> {
 							}
 							Action::Suspend(blk, st) => {
 								let blk = prok.body().block(blk);
-								println!("suspend and resume at block {:?}", blk.name());
 								instance.set_state(st);
 								match *instance.kind_mut() {
 									InstanceKind::Process{ ref mut next_block, .. } => *next_block = Some(blk),
@@ -151,8 +150,21 @@ impl<'ts,'tm> Engine<'ts,'tm> {
 			}
 
 			InstanceKind::Entity{ entity } => {
-				println!("entity not implemented");
-				events
+				// let ctx = EntityContext::new(self.state.context(), entity);
+				let mut events = Vec::new();
+				for inst in entity.insts() {
+					let action = self.execute_instruction(inst, instance.values(), self.state.signals());
+					match action {
+						Action::None => (),
+						Action::Value(vs) => instance.set_value(inst.as_ref().into(), vs),
+						Action::Event(e) => events.push(e),
+						Action::Jump(..) => panic!("cannot jump in entity"),
+						Action::Suspend(..) => panic!("cannot suspend entity"),
+					}
+				}
+				let inputs = instance.inputs().iter().cloned().collect();
+				instance.set_state(InstanceState::Wait(None, inputs));
+				return events;
 			}
 		}
 	}
@@ -160,7 +172,7 @@ impl<'ts,'tm> Engine<'ts,'tm> {
 	/// Execute a single instruction. Returns an action to be taken in response
 	/// to the instruction.
 	fn execute_instruction(&self, inst: &Inst, values: &HashMap<ValueId, ValueSlot>, signals: &[Signal]) -> Action {
-		println!("executing instruction {:?}", inst);
+		// println!("executing instruction {:?}", inst);
 
 		// Resolves a value ref to a constant time value.
 		let resolve_delay = |vr: &ValueRef| -> ConstTime {
@@ -222,6 +234,27 @@ impl<'ts,'tm> Engine<'ts,'tm> {
 				))
 			}
 
+			// The probe instruction simply evaluates to the probed signal's
+			// current value.
+			ProbeInst(_, ref signal) => {
+				Action::Value(ValueSlot::Const(signals[resolve_signal(signal).as_usize()].value().clone()))
+			}
+
+			UnaryInst(op, _, ref arg) => {
+				Action::Value(ValueSlot::Const(Const::new(ConstKind::Int(execute_unary(
+					op,
+					resolve_value(arg).as_int(),
+				)))))
+			}
+
+			BinaryInst(op, _, ref lhs, ref rhs) => {
+				Action::Value(ValueSlot::Const(Const::new(ConstKind::Int(execute_binary(
+					op,
+					resolve_value(lhs).as_int(),
+					resolve_value(rhs).as_int(),
+				)))))
+			}
+
 			_ => panic!("unsupported instruction {:#?}", inst)
 		}
 	}
@@ -273,4 +306,70 @@ enum Action {
 	/// Suspend execution of the current instance and change the instance's
 	/// state.
 	Suspend(BlockRef, InstanceState),
+}
+
+
+fn execute_unary(op: UnaryOp, arg: &ConstInt) -> ConstInt {
+	ConstInt::new(arg.width(), match op {
+		UnaryOp::Not => bigint_bitwise_unary(arg.width(), arg.value(), |arg| !arg),
+	})
+}
+
+fn execute_binary(op: BinaryOp, lhs: &ConstInt, rhs: &ConstInt) -> ConstInt {
+	use num::ToPrimitive;
+	use std::ops::Rem;
+	use num::Integer;
+	ConstInt::new(lhs.width(), match op {
+		BinaryOp::Add => lhs.value() + rhs.value(),
+		BinaryOp::Sub => lhs.value() - rhs.value(),
+		BinaryOp::Mul => lhs.value() * rhs.value(),
+		BinaryOp::Div => lhs.value() / rhs.value(),
+		BinaryOp::Mod => lhs.value().mod_floor(rhs.value()),
+		BinaryOp::Rem => lhs.value().rem(rhs.value()),
+		BinaryOp::Shl => lhs.value() << rhs.value().to_usize().expect("shift amount too large"),
+		BinaryOp::Shr => lhs.value() >> rhs.value().to_usize().expect("shift amount too large"),
+		BinaryOp::And => bigint_bitwise_binary(lhs.width(), lhs.value(), rhs.value(), |lhs,rhs| lhs & rhs),
+		BinaryOp::Or  => bigint_bitwise_binary(lhs.width(), lhs.value(), rhs.value(), |lhs,rhs| lhs | rhs),
+		BinaryOp::Xor => bigint_bitwise_binary(lhs.width(), lhs.value(), rhs.value(), |lhs,rhs| lhs ^ rhs),
+	})
+}
+
+/// Evaluate a unary bitwise logic operation on a big integer.
+fn bigint_bitwise_unary<F>(width: usize, arg: &BigInt, op: F) -> BigInt
+where F: Fn(u8) -> u8 {
+	use std::iter::repeat;
+	use num::bigint::Sign;
+	let mut bytes: Vec<u8> = make_unsigned(width, arg).to_bytes_le().into_iter().chain(repeat(0))
+		.map(op)
+		.take((width + 7) / 8)
+		.collect();
+	let unused_bits = bytes.len() * 8 - width;
+	*bytes.last_mut().unwrap() &= 0xFF >> unused_bits;
+	BigInt::from_bytes_le(Sign::Plus, &bytes)
+}
+
+/// Evaluate a binary bitwise logic operation between two big integers.
+fn bigint_bitwise_binary<F>(width: usize, lhs: &BigInt, rhs: &BigInt, op: F) -> BigInt
+where F: Fn(u8,u8) -> u8 {
+	use std::iter::repeat;
+	use num::bigint::Sign;
+	let mut bytes: Vec<u8> = make_unsigned(width, lhs).to_bytes_le().into_iter().chain(repeat(0))
+		.zip(make_unsigned(width, rhs).to_bytes_le().into_iter().chain(repeat(0)))
+		.map(|(l,r)| op(l,r))
+		.take((width + 7) / 8)
+		.collect();
+	let unused_bits = bytes.len() * 8 - width;
+	*bytes.last_mut().unwrap() &= 0xFF >> unused_bits;
+	BigInt::from_bytes_le(Sign::Plus, &bytes)
+}
+
+/// Convert the signed big integer into an unsigned big integer, taking the
+/// two's complement if the argument is negative.
+fn make_unsigned(width: usize, arg: &BigInt) -> BigUint {
+	use num::bigint::Sign;
+	use num::pow;
+	match arg.sign() {
+		Sign::Plus | Sign::NoSign => arg.to_biguint(),
+		Sign::Minus => (pow(BigInt::from(2), width) - arg).to_biguint(),
+	}.unwrap()
 }

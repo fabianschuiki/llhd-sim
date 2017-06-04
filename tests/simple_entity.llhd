@@ -3,7 +3,7 @@
 entity @simple (i8$ %in) (i8$ %out) {
 	%0 = prb %in
 	%1 = not i8 %0
-	%2 = add i8 %0 1
+	%2 = add i8 %0 19
 	%3 = xor i8 %1 %2
 	drv %out %3
 }

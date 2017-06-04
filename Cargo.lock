@@ -3,7 +3,7 @@ name = "llhd-sim"
 version = "0.1.0"
 dependencies = [
  "clap 2.24.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "llhd 0.1.0 (git+https://github.com/fabianschuiki/llhd?rev=b54955b)",
+ "llhd 0.1.0 (git+https://github.com/fabianschuiki/llhd?rev=cc5a885)",
  "num 0.1.37 (registry+https://github.com/rust-lang/crates.io-index)",
  "rayon 0.7.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -83,7 +83,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "llhd"
 version = "0.1.0"
-source = "git+https://github.com/fabianschuiki/llhd?rev=b54955b#b54955bb545c2c79d8ba4031fbc8c53a228bb9fe"
+source = "git+https://github.com/fabianschuiki/llhd?rev=cc5a885#cc5a8856e6463194235949a4dd6d4fcdfb553673"
 dependencies = [
  "combine 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "num 0.1.37 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -247,7 +247,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "checksum kernel32-sys 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "7507624b29483431c0ba2d82aece8ca6cdba9382bff4ddd0f7490560c056098d"
 "checksum lazy_static 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)" = "3b37545ab726dd833ec6420aaba8231c5b320814b9029ad585555d2a03e94fbf"
 "checksum libc 0.2.23 (registry+https://github.com/rust-lang/crates.io-index)" = "e7eb6b826bfc1fdea7935d46556250d1799b7fe2d9f7951071f4291710665e3e"
-"checksum llhd 0.1.0 (git+https://github.com/fabianschuiki/llhd?rev=b54955b)" = "<none>"
+"checksum llhd 0.1.0 (git+https://github.com/fabianschuiki/llhd?rev=cc5a885)" = "<none>"
 "checksum num 0.1.37 (registry+https://github.com/rust-lang/crates.io-index)" = "98b15ba84e910ea7a1973bccd3df7b31ae282bf9d8bd2897779950c9b8303d40"
 "checksum num-bigint 0.1.37 (registry+https://github.com/rust-lang/crates.io-index)" = "ba6d838b16e56da1b6c383d065ff1ec3c7d7797f65a3e8f6ba7092fd87820bac"
 "checksum num-complex 0.1.37 (registry+https://github.com/rust-lang/crates.io-index)" = "148eb324ca772230853418731ffdf13531738b50f89b30692a01fcdcb0a64677"

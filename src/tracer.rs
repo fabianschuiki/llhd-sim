@@ -70,11 +70,11 @@ impl<'tw> VcdTracer<'tw> {
 	/// changed.
 	fn flush_signal(&mut self, state: &State, signal: SignalRef) {
 		let value = match **state.signal(signal).value() {
-			ConstKind::Int(ref k) => format!("{}", k.value()),
+			ConstKind::Int(ref k) => format!("b{:b}", k.value()),
 			ConstKind::Time(_) => panic!("time not supported in VCD"),
 		};
 		for &(ref abbrev, _) in &self.abbrevs[&signal] {
-			write!(self.writer, "{}{}\n", value, abbrev).unwrap();
+			write!(self.writer, "{} {}\n", value, abbrev).unwrap();
 		}
 	}
 }
@@ -83,16 +83,22 @@ impl<'tw> Tracer for VcdTracer<'tw> {
 	fn init(&mut self, state: &State) {
 
 		// Allocate short names for all probed signals.
-		self.abbrevs = state.probes().iter().map(|(&signal, probes)|{
-			let ids = probes.iter().enumerate().map(|(mut index, name)|{
+		let mut index = 0;
+		let mut probed_signals: Vec<_> = state.probes().keys().map(|k| *k).collect();
+		probed_signals.sort();
+		self.abbrevs = probed_signals.iter().map(|&signal|{
+			let probes = &state.probes()[&signal];
+			let ids = probes.iter().map(|name|{
+				let mut idx = index;
 				let mut id = String::new();
 				loop {
-					id.push((33 + index % 94) as u8 as char);
-					index /= 33;
-					if index == 0 {
+					id.push((33 + idx % 94) as u8 as char);
+					idx /= 94;
+					if idx == 0 {
 						break;
 					}
 				}
+				index += 1;
 				(id, name.clone())
 			}).collect();
 			(signal, ids)
@@ -101,8 +107,9 @@ impl<'tw> Tracer for VcdTracer<'tw> {
 		// Dump the VCD header.
 		write!(self.writer, "$version\nllhd-sim\n$end\n").unwrap();
 		write!(self.writer, "$timescale 1ps $end\n").unwrap();
-		for (&sigref, abbrevs) in &self.abbrevs {
+		for &sigref in probed_signals.iter() {
 			use llhd::ty::*;
+			let abbrevs = &self.abbrevs[&sigref];
 
 			// Determine the VCD type of the signal.
 			let signal = state.signal(sigref);

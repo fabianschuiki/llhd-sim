@@ -54,7 +54,7 @@ fn main() {
 	let mut state = builder::build(&module);
 
 	// Create a new tracer for this state that will generate some waveforms.
-	let mut file = File::create("output.vcd").unwrap();
+	let mut file = File::create("/tmp/output.vcd").unwrap();
 	let mut tracer = VcdTracer::new(&mut file);
 	tracer.init(&state);
 

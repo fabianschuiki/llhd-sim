@@ -82,7 +82,7 @@ impl<'tm> Builder<'tm> {
 		};
 
 		// Create the unit instance.
-		self.insts.push(Instance::new(values, kind))
+		self.insts.push(Instance::new(values, kind, inputs, outputs))
 	}
 
 	/// Consume the builder and assemble the simulation state.

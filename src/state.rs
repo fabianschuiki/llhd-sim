@@ -145,6 +145,11 @@ impl SignalRef {
 	pub fn new(id: usize) -> SignalRef {
 		SignalRef(id)
 	}
+
+	/// Return the underlying index of this reference.
+	pub fn as_usize(&self) -> usize {
+		self.0
+	}
 }
 
 pub struct Signal {
@@ -188,14 +193,18 @@ pub struct Instance<'tm> {
 	values: HashMap<ValueId, ValueSlot>,
 	kind: InstanceKind<'tm>,
 	state: InstanceState,
+	inputs: Vec<SignalRef>,
+	outputs: Vec<SignalRef>,
 }
 
 impl<'tm> Instance<'tm> {
-	pub fn new(values: HashMap<ValueId, ValueSlot>, kind: InstanceKind<'tm>) -> Instance<'tm> {
+	pub fn new(values: HashMap<ValueId, ValueSlot>, kind: InstanceKind<'tm>, inputs: Vec<SignalRef>, outputs: Vec<SignalRef>) -> Instance<'tm> {
 		Instance {
 			values: values,
 			kind: kind,
 			state: InstanceState::Ready,
+			inputs: inputs,
+			outputs: outputs,
 		}
 	}
 
@@ -230,6 +239,16 @@ impl<'tm> Instance<'tm> {
 	/// Change an entry in this instance's value table.
 	pub fn set_value(&mut self, id: ValueId, value: ValueSlot) {
 		self.values.insert(id, value);
+	}
+
+	/// Get a slice of the instance's input signals.
+	pub fn inputs(&self) -> &[SignalRef] {
+		&self.inputs
+	}
+
+	/// Get a slice of the instance's output signals.
+	pub fn outputs(&self) -> &[SignalRef] {
+		&self.outputs
 	}
 }
 
