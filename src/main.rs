@@ -1,12 +1,20 @@
 // Copyright (c) 2017 Fabian Schuiki
 extern crate llhd;
 extern crate clap;
+extern crate num;
+extern crate rayon;
 
 pub mod builder;
+pub mod state;
+// pub mod worker;
+pub mod engine;
+pub mod tracer;
 
 use std::fs::File;
 use std::io::prelude::*;
 use clap::{Arg, App};
+use engine::Engine;
+use tracer::{Tracer, VcdTracer};
 
 
 fn main() {
@@ -42,6 +50,20 @@ fn main() {
 		llhd::assembly::Writer::new(&mut stdout.lock()).visit_module(&module);
 	}
 
-	// Build the simulation for this module.
-	builder::build(&module);
+	// Build the simulation state for this module.
+	let mut state = builder::build(&module);
+
+	// Create a new tracer for this state that will generate some waveforms.
+	let mut file = File::create("output.vcd").unwrap();
+	let mut tracer = VcdTracer::new(&mut file);
+	tracer.init(&state);
+
+	// Create the simulation engine and run the simulation to completion.
+	{
+		let mut engine = Engine::new(&mut state);
+		engine.run(&mut tracer);
+	}
+
+	// Flush the tracer.
+	tracer.finish(&state);
 }

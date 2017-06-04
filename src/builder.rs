@@ -4,22 +4,21 @@
 //! design.
 
 use std::collections::HashMap;
-
+use std::sync::Mutex;
 use llhd::Module;
-use llhd::ModuleContext;
 use llhd::Argument;
-use llhd::{Value, ValueRef, ValueId};
+use llhd::Value;
+use llhd::ValueRef;
 use llhd::Type;
-use llhd::Process;
-use llhd::Entity;
-use llhd::Block;
+use llhd::const_zero;
+use state::*;
 
 
 pub struct Builder<'tm> {
 	module: &'tm Module,
-	ctx: ModuleContext<'tm>,
 	signals: Vec<Signal>,
-	signal_probes: HashMap<SignalRef, Vec<String>>,
+	probes: HashMap<SignalRef, Vec<String>>,
+	insts: Vec<Instance<'tm>>,
 	// name_stack: Vec<String>,
 }
 
@@ -28,25 +27,24 @@ impl<'tm> Builder<'tm> {
 	pub fn new(module: &Module) -> Builder {
 		Builder {
 			module: module,
-			ctx: ModuleContext::new(module),
 			signals: Vec::new(),
-			signal_probes: HashMap::new(),
+			probes: HashMap::new(),
+			insts: Vec::new(),
 			// name_stack: Vec::new(),
 		}
 	}
 
 	/// Allocate a new signal in the simulation and return a reference to it.
-	pub fn alloc_signal(&mut self, _: Type) -> SignalRef {
-		let r = SignalRef(self.signals.len());
-		self.signals.push(Signal);
+	pub fn alloc_signal(&mut self, ty: Type) -> SignalRef {
+		let r = SignalRef::new(self.signals.len());
+		self.signals.push(Signal::new(ty.as_signal().clone(), const_zero(ty.as_signal())));
 		r
 	}
 
 	/// Allocate a new signal probe in the simulation. This essentially assigns
 	/// a name to a signal which is also known to the user.
 	pub fn alloc_signal_probe(&mut self, signal: SignalRef, name: String) {
-		println!("probe \"{}\" on signal {:?}", name, signal);
-		self.signal_probes.entry(signal).or_insert(Vec::new()).push(name);
+		self.probes.entry(signal).or_insert(Vec::new()).push(name);
 	}
 
 	/// Instantiate a process or entity for simulation. This recursively builds
@@ -83,22 +81,24 @@ impl<'tm> Builder<'tm> {
 			_ => panic!("instantiate called on non-unit value {:?}", unit)
 		};
 
-		println!("values: {:#?}", values);
-
 		// Create the unit instance.
-		let inst = Instance {
-			values: values,
-			kind: kind,
-		};
+		self.insts.push(Instance::new(values, kind))
+	}
 
-		// TODO: Do something with the instance. Add it to "self" somewhere for
-		// example :)
+	/// Consume the builder and assemble the simulation state.
+	pub fn finish(self) -> State<'tm> {
+		State::new(
+			self.module,
+			self.signals,
+			self.probes,
+			self.insts.into_iter().map(|i| Mutex::new(i)).collect(),
+		)
 	}
 }
 
 
 /// Build the simulation for a module.
-pub fn build(module: &Module) {
+pub fn build(module: &Module) -> State {
 	let mut builder = Builder::new(module);
 
 	// Find the first process or entity in the module, which we will use as the
@@ -115,6 +115,9 @@ pub fn build(module: &Module) {
 
 	// Instantiate the top-level module.
 	builder.instantiate(root, inputs, outputs);
+
+	// Build the simulation state.
+	builder.finish()
 }
 
 
@@ -134,31 +137,5 @@ pub fn unit_outputs<'a>(module: &'a Module, unit: &ValueRef) -> &'a [Argument] {
 		ValueRef::Process(r) => module.process(r).outputs(),
 		ValueRef::Entity(r) => module.entity(r).outputs(),
 		_ => panic!("unit_outputs called on non-unit {:?}", unit),
-	}
-}
-
-
-#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
-pub struct SignalRef(usize);
-
-pub struct Signal;
-
-pub struct Instance<'tm> {
-	values: HashMap<ValueId, ValueSlot>,
-	kind: InstanceKind<'tm>,
-}
-
-#[derive(Debug)]
-pub enum ValueSlot {
-	Signal(SignalRef),
-}
-
-pub enum InstanceKind<'tm> {
-	Process {
-		prok: &'tm Process,
-		next_block: Option<&'tm Block>,
-	},
-	Entity {
-		entity: &'tm Entity,
 	}
 }
