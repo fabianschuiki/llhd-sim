@@ -6,7 +6,7 @@ use std;
 use std::collections::{HashMap, HashSet};
 use state::{State, SignalRef};
 use num::{BigInt, BigRational};
-use llhd::ConstKind;
+use llhd::{Const, ConstKind};
 
 
 pub trait Tracer {
@@ -36,7 +36,7 @@ pub struct VcdTracer<'tw> {
 	writer: &'tw mut std::io::Write,
 	abbrevs: HashMap<SignalRef, Vec<(String, String)>>,
 	time: BigRational,
-	pending: HashSet<SignalRef>,
+	pending: HashMap<SignalRef, Const>,
 	precision: BigRational,
 }
 
@@ -48,7 +48,7 @@ impl<'tw> VcdTracer<'tw> {
 			writer: writer,
 			abbrevs: HashMap::new(),
 			time: zero(),
-			pending: HashSet::new(),
+			pending: HashMap::new(),
 			// Hard-code the precision to ps for now. Later on, we might want to
 			// make this configurable or automatically determined by the module.
 			precision: BigInt::parse_bytes(b"1000000000000", 10).unwrap().into(), // ps
@@ -57,19 +57,19 @@ impl<'tw> VcdTracer<'tw> {
 
 	/// Write the value of all signals that have changed since the last flush.
 	/// Clears the `pending` set.
-	fn flush(&mut self, state: &State) {
+	fn flush(&mut self) {
 		let time = (&self.time * &self.precision).trunc();
 		write!(self.writer, "#{}\n", time).unwrap();
-		for signal in std::mem::replace(&mut self.pending, HashSet::new()) {
-			self.flush_signal(state, signal);
+		for (signal, value) in std::mem::replace(&mut self.pending, HashMap::new()) {
+			self.flush_signal(signal, &value);
 		}
 	}
 
 	/// Write the value of a signal. Called at the beginning of the simulation
 	/// to perform a variable dump, and during flush once for each signal that
 	/// changed.
-	fn flush_signal(&mut self, state: &State, signal: SignalRef) {
-		let value = match **state.signal(signal).value() {
+	fn flush_signal(&mut self, signal: SignalRef, value: &Const) {
+		let value = match **value {
 			ConstKind::Int(ref k) => format!("b{:b}", k.value()),
 			ConstKind::Time(_) => panic!("time not supported in VCD"),
 		};
@@ -128,7 +128,7 @@ impl<'tw> Tracer for VcdTracer<'tw> {
 		// Dump the variables.
 		write!(self.writer, "$dumpvars\n").unwrap();
 		for &signal in state.probes().keys() {
-			self.flush_signal(state, signal);
+			self.flush_signal(signal, state.signal(signal).value());
 		}
 		write!(self.writer, "$end\n").unwrap();
 	}
@@ -137,15 +137,15 @@ impl<'tw> Tracer for VcdTracer<'tw> {
 		// If the physical time in seconds of the simulation changed, flush the
 		// aggregated pending changes and update the time.
 		if self.time != *state.time().time() {
-			self.flush(state);
+			self.flush();
 			self.time = state.time().time().clone();
 		}
 
 		// Mark the changed signals for consideration during the next flush.
-		self.pending.extend(changed.iter());
+		self.pending.extend(changed.iter().map(|&signal| (signal, state.signal(signal).value().clone())));
 	}
 
-	fn finish(&mut self, state: &State) {
-		self.flush(state);
+	fn finish(&mut self, _: &State) {
+		self.flush();
 	}
 }

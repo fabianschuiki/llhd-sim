@@ -1,0 +1,33 @@
+; This file tests instantiation of processes and entities.
+
+proc %counter () (i4$ %Z) {
+%entry:
+	drv %Z 0
+	drv %Z 1 10ns
+	drv %Z 2 20ns
+	drv %Z 3 30ns
+	drv %Z 4 40ns
+	drv %Z 5 50ns
+	drv %Z 6 60ns
+	drv %Z 7 70ns
+	wait %done for 80ns
+%done:
+	; halt
+}
+
+entity %combinator (i4$ %A, i4$ %B) (i4$ %C) {
+	%0 = prb %A
+	%1 = prb %B
+	%2 = add i4 %0 %1
+	drv %C %2
+}
+
+entity @top () (i4$ %out) {
+	%count = sig i4
+	inst %counter () (%count)
+	%0 = prb %count
+	%x2 = mul i4 %0 2
+	%count2 = sig i4
+	drv %count2 %x2
+	inst %combinator (%count, %count2) (%out)
+}

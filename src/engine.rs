@@ -146,7 +146,7 @@ impl<'ts,'tm> Engine<'ts,'tm> {
 				// turn the println into a panic.
 				instance.set_state(InstanceState::Done);
 				println!("process starved of instructions");
-				Vec::new()
+				events
 			}
 
 			InstanceKind::Entity{ entity } => {
@@ -164,7 +164,7 @@ impl<'ts,'tm> Engine<'ts,'tm> {
 				}
 				let inputs = instance.inputs().iter().cloned().collect();
 				instance.set_state(InstanceState::Wait(None, inputs));
-				return events;
+				events
 			}
 		}
 	}
@@ -179,7 +179,7 @@ impl<'ts,'tm> Engine<'ts,'tm> {
 			match *vr {
 				ValueRef::Const(ref k) => match **k {
 					ConstKind::Time(ref k) => k.clone(),
-					_ => panic!("constant value is not a tiem {:?}", k),
+					_ => panic!("constant value is not a time {:?}", k),
 				},
 				_ => panic!("value does not resolve to a delay"),
 			}
@@ -254,6 +254,10 @@ impl<'ts,'tm> Engine<'ts,'tm> {
 					resolve_value(rhs).as_int(),
 				)))))
 			}
+
+			// Signal and instance instructions are simply ignored, as they are
+			// handled by the builder and only occur in entities.
+			SignalInst(..) | InstanceInst(..) => Action::None,
 
 			_ => panic!("unsupported instruction {:#?}", inst)
 		}
