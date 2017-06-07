@@ -29,5 +29,5 @@ proc @four_pulses () (i1$ %out) {
 	drv %out 0
 	wait %pulse8 for 10ns
 %pulse8:
-	; halt
+	halt
 }

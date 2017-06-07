@@ -12,7 +12,7 @@ proc %counter () (i4$ %Z) {
 	drv %Z 7 70ns
 	wait %done for 80ns
 %done:
-	; halt
+	halt
 }
 
 entity %combinator (i4$ %A, i4$ %B) (i4$ %C) {

@@ -130,10 +130,10 @@ impl<'ts,'tm> Engine<'ts,'tm> {
 								break;
 							}
 							Action::Suspend(blk, st) => {
-								let blk = prok.body().block(blk);
+								let blk = blk.map(|br| prok.body().block(br));
 								instance.set_state(st);
 								match *instance.kind_mut() {
-									InstanceKind::Process{ ref mut next_block, .. } => *next_block = Some(blk),
+									InstanceKind::Process{ ref mut next_block, .. } => *next_block = blk,
 									_ => unreachable!(),
 								}
 								return events;
@@ -142,11 +142,9 @@ impl<'ts,'tm> Engine<'ts,'tm> {
 					}
 				}
 
-				// TODO: Remove this once we have the "halt" instruction and
-				// turn the println into a panic.
-				instance.set_state(InstanceState::Done);
-				println!("process starved of instructions");
-				events
+				// We should never arrive here, since every block ends with a
+				// terminator instruction that redirects control flow.
+				panic!("process starved of instructions");
 			}
 
 			InstanceKind::Entity{ entity } => {
@@ -225,7 +223,7 @@ impl<'ts,'tm> Engine<'ts,'tm> {
 			}
 
 			WaitInst(block, ref delay, ref sensitivity) => {
-				Action::Suspend(block, InstanceState::Wait(
+				Action::Suspend(Some(block), InstanceState::Wait(
 					// Calculate the absolute simulation time after which the
 					// unit should wake up again, if any.
 					delay.as_ref().map(|d| self.time_after_delay(&resolve_delay(d))),
@@ -258,6 +256,8 @@ impl<'ts,'tm> Engine<'ts,'tm> {
 			// Signal and instance instructions are simply ignored, as they are
 			// handled by the builder and only occur in entities.
 			SignalInst(..) | InstanceInst(..) => Action::None,
+
+			HaltInst => Action::Suspend(None, InstanceState::Done),
 
 			_ => panic!("unsupported instruction {:#?}", inst)
 		}
@@ -309,7 +309,7 @@ enum Action {
 	Jump(BlockRef),
 	/// Suspend execution of the current instance and change the instance's
 	/// state.
-	Suspend(BlockRef, InstanceState),
+	Suspend(Option<BlockRef>, InstanceState),
 }
 
 
