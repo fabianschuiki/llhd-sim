@@ -3,8 +3,16 @@ name = "llhd-sim"
 version = "0.1.0"
 authors = ["Fabian Schuiki <fschuiki@iis.ee.ethz.ch>"]
 
+description = "The reference simulator for Low Level Hardware Description assembly."
+repository = "https://github.com/fabianschuiki/llhd-sim"
+readme = "README.md"
+license = "Apache-2.0 OR MIT"
+
+[badges]
+travis-ci = { repository = "fabianschuiki/llhd-sim", branch = "master" }
+
 [dependencies]
-llhd = { git = "https://github.com/fabianschuiki/llhd", rev = "8b7806e" }
+llhd = "0.1"
 clap = "2.24.2"
 num = "0.1"
 rayon = "0.7.1"
