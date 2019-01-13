@@ -1,8 +1,6 @@
 // Copyright (c) 2017 Fabian Schuiki
-extern crate clap;
-extern crate llhd;
-extern crate num;
-extern crate rayon;
+#[macro_use]
+extern crate log;
 
 pub mod builder;
 pub mod state;
@@ -10,16 +8,22 @@ pub mod state;
 pub mod engine;
 pub mod tracer;
 
-use clap::{App, Arg};
 use crate::engine::Engine;
+use crate::tracer::{Tracer, VcdTracer};
+use clap::{App, Arg};
 use std::fs::File;
 use std::io::prelude::*;
-use crate::tracer::{Tracer, VcdTracer};
 
 fn main() {
     // Parse the command line arguments.
     let matches = App::new("llhd-sim")
         .about("Simulates low level hardware description files.")
+        .arg(
+            Arg::with_name("verbosity")
+                .short("v")
+                .multiple(true)
+                .help("Increase message verbosity"),
+        )
         .arg(
             Arg::with_name("INPUT")
                 .help("The input file to simulate")
@@ -27,6 +31,13 @@ fn main() {
                 .index(1),
         )
         .get_matches();
+
+    // Configure the logger.
+    stderrlog::new()
+        .quiet(!matches.is_present("verbosity"))
+        .verbosity(matches.occurrences_of("verbosity") as usize + 1)
+        .init()
+        .unwrap();
 
     // Load the input file.
     let module = {
