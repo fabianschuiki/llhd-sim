@@ -1,7 +1,6 @@
 # llhd-sim
 
 [![Build Status](https://travis-ci.org/fabianschuiki/llhd-sim.svg?branch=master)](https://travis-ci.org/fabianschuiki/llhd-sim)
-[![Released API docs](https://docs.rs/llhd-sim/badge.svg)](https://docs.rs/llhd-sim)
 [![Crates.io](https://img.shields.io/crates/v/llhd-sim.svg)](https://crates.io/crates/llhd-sim)
 
 This is the reference simulator for [LLHD], striving to be complete but as minimal as possible. Its goal is to serve as a starting point for developing more sophisticated simulators for hardware written in LLHD. As a secondary goal it acts as an application example of LLHD.
