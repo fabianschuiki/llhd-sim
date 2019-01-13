@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `-v` verbosity option
 - Add `stderrlog` and `log` dependencies
 - Support branch instructions
+- Support comparison instructions
 
 ## 0.1.0 - 2019-01-05
 ### Added

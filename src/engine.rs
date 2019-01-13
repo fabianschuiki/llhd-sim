@@ -294,13 +294,25 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                     Action::Jump(if_false)
                 }
             }
+            CompareInst(op, _, ref lhs, ref rhs) => {
+                Action::Value(ValueSlot::Const(Const::new(ConstKind::Int(ConstInt::new(
+                    1,
+                    match execute_comparison(
+                        op,
+                        resolve_value(lhs).as_int(),
+                        resolve_value(rhs).as_int(),
+                    ) {
+                        false => 0.into(),
+                        true => 1.into(),
+                    },
+                )))))
+            }
 
             // Signal and instance instructions are simply ignored, as they are
             // handled by the builder and only occur in entities.
             SignalInst(..) | InstanceInst(..) => Action::None,
 
             HaltInst => Action::Suspend(None, InstanceState::Done),
-
             _ => panic!("unsupported instruction {:#?}", inst),
         }
     }
@@ -444,4 +456,27 @@ fn make_unsigned(width: usize, arg: &BigInt) -> BigUint {
         Sign::Minus => (pow(BigInt::from(2), width) - arg).to_biguint(),
     }
     .unwrap()
+}
+
+fn execute_comparison(op: CompareOp, lhs: &ConstInt, rhs: &ConstInt) -> bool {
+    match op {
+        CompareOp::Eq => lhs.value() == rhs.value(),
+        CompareOp::Neq => lhs.value() != rhs.value(),
+        CompareOp::Slt => lhs.value() < rhs.value(),
+        CompareOp::Sle => lhs.value() <= rhs.value(),
+        CompareOp::Sgt => lhs.value() > rhs.value(),
+        CompareOp::Sge => lhs.value() >= rhs.value(),
+        CompareOp::Ult => {
+            make_unsigned(lhs.width(), lhs.value()) < make_unsigned(rhs.width(), rhs.value())
+        }
+        CompareOp::Ule => {
+            make_unsigned(lhs.width(), lhs.value()) <= make_unsigned(rhs.width(), rhs.value())
+        }
+        CompareOp::Ugt => {
+            make_unsigned(lhs.width(), lhs.value()) > make_unsigned(rhs.width(), rhs.value())
+        }
+        CompareOp::Uge => {
+            make_unsigned(lhs.width(), lhs.value()) >= make_unsigned(rhs.width(), rhs.value())
+        }
+    }
 }
