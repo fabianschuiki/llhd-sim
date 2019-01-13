@@ -8,13 +8,13 @@ use llhd::value::BlockRef;
 use llhd::{Const, ConstInt, ConstKind, ConstTime, ProcessContext, ValueId, ValueRef};
 use num::{BigInt, BigUint};
 use rayon::prelude::*;
-use state::{
+use crate::state::{
     Event, Instance, InstanceKind, InstanceRef, InstanceState, Signal, SignalRef, State,
     TimedInstance, ValueSlot,
 };
 use std::borrow::BorrowMut;
 use std::collections::{HashMap, HashSet};
-use tracer::Tracer;
+use crate::tracer::Tracer;
 
 pub struct Engine<'ts, 'tm: 'ts> {
     step: usize,

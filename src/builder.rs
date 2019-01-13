@@ -11,7 +11,7 @@ use llhd::Type;
 use llhd::Value;
 use llhd::ValueId;
 use llhd::ValueRef;
-use state::*;
+use crate::state::*;
 use std::collections::HashMap;
 use std::sync::Mutex;
 

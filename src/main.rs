@@ -11,10 +11,10 @@ pub mod engine;
 pub mod tracer;
 
 use clap::{App, Arg};
-use engine::Engine;
+use crate::engine::Engine;
 use std::fs::File;
 use std::io::prelude::*;
-use tracer::{Tracer, VcdTracer};
+use crate::tracer::{Tracer, VcdTracer};
 
 fn main() {
     // Parse the command line arguments.

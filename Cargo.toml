@@ -2,6 +2,7 @@
 name = "llhd-sim"
 version = "0.1.0"
 authors = ["Fabian Schuiki <fschuiki@iis.ee.ethz.ch>"]
+edition = "2018"
 
 description = "The reference simulator for Low Level Hardware Description assembly."
 repository = "https://github.com/fabianschuiki/llhd-sim"

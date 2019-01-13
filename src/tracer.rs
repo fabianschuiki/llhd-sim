@@ -4,19 +4,19 @@
 
 use llhd::{Const, ConstKind};
 use num::{BigInt, BigRational};
-use state::{SignalRef, State};
+use crate::state::{SignalRef, State};
 use std;
 use std::collections::{HashMap, HashSet};
 
 pub trait Tracer {
     /// Called once at the beginning of the simulation.
-    fn init(&mut self, &State);
+    fn init(&mut self, _: &State);
 
     /// Called by the simulation engine after each time step.
-    fn step(&mut self, &State, &HashSet<SignalRef>);
+    fn step(&mut self, _: &State, _: &HashSet<SignalRef>);
 
     /// Called once at the end of the simulation.
-    fn finish(&mut self, &State);
+    fn finish(&mut self, _: &State);
 }
 
 /// A no-op tracer that does nothing.
