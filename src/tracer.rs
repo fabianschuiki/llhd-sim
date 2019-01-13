@@ -2,7 +2,7 @@
 
 //! A simulation tracer that can store the generated waveform to disk.
 
-use crate::state::{SignalRef, State};
+use crate::state::{Scope, SignalRef, State};
 use llhd::{Const, ConstKind};
 use num::{BigInt, BigRational};
 use std;
@@ -76,44 +76,30 @@ impl<'tw> VcdTracer<'tw> {
             write!(self.writer, "{} {}\n", value, abbrev).unwrap();
         }
     }
-}
 
-impl<'tw> Tracer for VcdTracer<'tw> {
-    fn init(&mut self, state: &State) {
-        // Allocate short names for all probed signals.
-        let mut index = 0;
-        let mut probed_signals: Vec<_> = state.probes().keys().map(|k| *k).collect();
+    /// Allocate short names and emit `$scope` statement.
+    fn prepare_scope(&mut self, state: &State, scope: &Scope, index: &mut usize) {
+        write!(self.writer, "$scope module {} $end\n", scope.name).unwrap();
+        let mut probed_signals: Vec<_> = scope.probes.keys().cloned().collect();
         probed_signals.sort();
-        self.abbrevs = probed_signals
-            .iter()
-            .map(|&signal| {
-                let probes = &state.probes()[&signal];
-                let ids = probes
-                    .iter()
-                    .map(|name| {
-                        let mut idx = index;
-                        let mut id = String::new();
-                        loop {
-                            id.push((33 + idx % 94) as u8 as char);
-                            idx /= 94;
-                            if idx == 0 {
-                                break;
-                            }
-                        }
-                        index += 1;
-                        (id, name.clone())
-                    })
-                    .collect();
-                (signal, ids)
-            })
-            .collect();
-
-        // Dump the VCD header.
-        write!(self.writer, "$version\nllhd-sim\n$end\n").unwrap();
-        write!(self.writer, "$timescale 1ps $end\n").unwrap();
-        for &sigref in probed_signals.iter() {
+        for sigref in probed_signals {
             use llhd::ty::*;
-            let abbrevs = &self.abbrevs[&sigref];
+
+            // Allocate short names for the probed signals.
+            let probes = &scope.probes[&sigref];
+            let names = probes.iter().map(|name| {
+                let mut idx = *index;
+                let mut id = String::new();
+                loop {
+                    id.push((33 + idx % 94) as u8 as char);
+                    idx /= 94;
+                    if idx == 0 {
+                        break;
+                    }
+                }
+                *index += 1;
+                (id, name.clone())
+            });
 
             // Determine the VCD type of the signal.
             let signal = state.signal(sigref);
@@ -123,10 +109,25 @@ impl<'tw> Tracer for VcdTracer<'tw> {
             };
 
             // Write the abbreviations for this signal.
-            for &(ref abbrev, ref probe) in abbrevs {
+            let abbrevs_for_signal = self.abbrevs.entry(sigref).or_insert_with(Vec::new);
+            for (abbrev, probe) in names {
                 write!(self.writer, "$var {} {} {} $end\n", ty, abbrev, probe).unwrap();
+                abbrevs_for_signal.push((abbrev, probe));
             }
         }
+        for subscope in scope.subscopes.iter() {
+            self.prepare_scope(state, subscope, index);
+        }
+        write!(self.writer, "$upscope $end\n").unwrap();
+    }
+}
+
+impl<'tw> Tracer for VcdTracer<'tw> {
+    fn init(&mut self, state: &State) {
+        // Dump the VCD header.
+        write!(self.writer, "$version\nllhd-sim\n$end\n").unwrap();
+        write!(self.writer, "$timescale 1ps $end\n").unwrap();
+        self.prepare_scope(state, state.scope(), &mut 0);
         write!(self.writer, "$enddefinitions $end\n").unwrap();
 
         // Dump the variables.
