@@ -285,6 +285,16 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                 ))))
             }
 
+            BranchInst(BranchKind::Uncond(block)) => Action::Jump(block),
+            BranchInst(BranchKind::Cond(ref cond, if_true, if_false)) => {
+                let v = resolve_value(cond);
+                if v == llhd::const_int(1, 1.into()) {
+                    Action::Jump(if_true)
+                } else {
+                    Action::Jump(if_false)
+                }
+            }
+
             // Signal and instance instructions are simply ignored, as they are
             // handled by the builder and only occur in entities.
             SignalInst(..) | InstanceInst(..) => Action::None,
