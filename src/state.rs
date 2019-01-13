@@ -14,6 +14,7 @@ pub struct State<'tm> {
     time: ConstTime,
     signals: Vec<Signal>,
     probes: HashMap<SignalRef, Vec<String>>,
+    scope: Scope,
     insts: Vec<Mutex<Instance<'tm>>>,
     events: BinaryHeap<Event>,
     timed: BinaryHeap<TimedInstance>,
@@ -25,15 +26,17 @@ impl<'tm> State<'tm> {
         module: &'tm Module,
         signals: Vec<Signal>,
         probes: HashMap<SignalRef, Vec<String>>,
+        scope: Scope,
         insts: Vec<Mutex<Instance<'tm>>>,
     ) -> State<'tm> {
         State {
             module: module,
             context: ModuleContext::new(module),
             time: ConstTime::new(zero(), zero(), zero()),
-            signals: signals,
-            probes: probes,
-            insts: insts,
+            signals,
+            probes,
+            scope,
+            insts,
             events: BinaryHeap::new(),
             timed: BinaryHeap::new(),
         }
@@ -89,9 +92,14 @@ impl<'tm> State<'tm> {
         &self.signals
     }
 
-    /// Get a slice of all probe signals and the corresponding names.
+    /// Get a map of all probe signals and the corresponding names.
     pub fn probes(&self) -> &HashMap<SignalRef, Vec<String>> {
         &self.probes
+    }
+
+    /// Get the root scope of the design.
+    pub fn scope(&self) -> &Scope {
+        &self.scope
     }
 
     /// Add a set of events to the schedule.
@@ -365,5 +373,40 @@ impl Ord for TimedInstance {
 impl PartialOrd for TimedInstance {
     fn partial_cmp(&self, rhs: &TimedInstance) -> Option<Ordering> {
         Some(self.cmp(rhs))
+    }
+}
+
+/// A level of hierarchy level.
+///
+/// The scope represents the hierarchy of a design. Each instantiation or
+/// process creates a new subscope with its own set of probes.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct Scope {
+    /// The name of the scope.
+    pub name: String,
+    /// The probes in this scope.
+    pub probes: HashMap<SignalRef, Vec<String>>,
+    /// The subscopes.
+    pub subscopes: Vec<Scope>,
+}
+
+impl Scope {
+    /// Create a new empty scope.
+    pub fn new(name: impl Into<String>) -> Scope {
+        Scope {
+            name: name.into(),
+            probes: Default::default(),
+            subscopes: vec![],
+        }
+    }
+
+    /// Add a subscope.
+    pub fn add_subscope(&mut self, scope: Scope) {
+        self.subscopes.push(scope);
+    }
+
+    /// Add a probe.
+    pub fn add_probe(&mut self, signal: SignalRef, name: String) {
+        self.probes.entry(signal).or_insert(Vec::new()).push(name);
     }
 }

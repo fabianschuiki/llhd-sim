@@ -3,24 +3,16 @@
 //! The simulation builder creates the structure necessary for simulating a
 //! design.
 
-use llhd::const_zero;
-use llhd::inst::*;
-use llhd::Argument;
-use llhd::Module;
-use llhd::Type;
-use llhd::Value;
-use llhd::ValueId;
-use llhd::ValueRef;
 use crate::state::*;
-use std::collections::HashMap;
-use std::sync::Mutex;
+use llhd::{const_zero, inst::*, value::Context, Argument, Module, Type, Value, ValueId, ValueRef};
+use std::{collections::HashMap, sync::Mutex};
 
 pub struct Builder<'tm> {
     module: &'tm Module,
     signals: Vec<Signal>,
     probes: HashMap<SignalRef, Vec<String>>,
     insts: Vec<Instance<'tm>>,
-    // name_stack: Vec<String>,
+    scope_stack: Vec<Scope>,
 }
 
 impl<'tm> Builder<'tm> {
@@ -31,7 +23,7 @@ impl<'tm> Builder<'tm> {
             signals: Vec::new(),
             probes: HashMap::new(),
             insts: Vec::new(),
-            // name_stack: Vec::new(),
+            scope_stack: Vec::new(),
         }
     }
 
@@ -49,7 +41,11 @@ impl<'tm> Builder<'tm> {
     /// Allocate a new signal probe in the simulation. This essentially assigns
     /// a name to a signal which is also known to the user.
     pub fn alloc_signal_probe(&mut self, signal: SignalRef, name: String) {
-        self.probes.entry(signal).or_insert(Vec::new()).push(name);
+        self.probes
+            .entry(signal)
+            .or_insert(Vec::new())
+            .push(name.clone());
+        self.scope_stack.last_mut().unwrap().add_probe(signal, name);
     }
 
     /// Instantiate a process or entity for simulation. This recursively builds
@@ -98,6 +94,8 @@ impl<'tm> Builder<'tm> {
                             values.insert(inst.as_ref().into(), ValueSlot::Signal(sig));
                         }
                         InstanceInst(_, ref unit, ref ins, ref outs) => {
+                            let ctx = llhd::ModuleContext::new(self.module);
+                            self.push_scope(inst.name().unwrap_or_else(|| ctx.name(unit).unwrap()));
                             let resolve_signal =
                                 |value: &ValueRef| match values[&value.id().unwrap()] {
                                     ValueSlot::Signal(sig) => sig,
@@ -108,6 +106,7 @@ impl<'tm> Builder<'tm> {
                                 ins.iter().map(&resolve_signal).collect(),
                                 outs.iter().map(&resolve_signal).collect(),
                             );
+                            self.pop_scope();
                         }
                         _ => (),
                     }
@@ -130,8 +129,20 @@ impl<'tm> Builder<'tm> {
             self.module,
             self.signals,
             self.probes,
+            self.scope_stack.into_iter().next().unwrap(),
             self.insts.into_iter().map(|i| Mutex::new(i)).collect(),
         )
+    }
+
+    /// Push a new scope onto the stack.
+    fn push_scope(&mut self, name: impl Into<String>) {
+        self.scope_stack.push(Scope::new(name));
+    }
+
+    /// Pop a scope off the stack.
+    fn pop_scope(&mut self) {
+        let scope = self.scope_stack.pop().unwrap();
+        self.scope_stack.last_mut().unwrap().add_subscope(scope);
     }
 }
 
@@ -162,6 +173,11 @@ pub fn build(module: &Module) -> State {
         .collect();
 
     // Instantiate the top-level module.
+    builder.push_scope(
+        llhd::ModuleContext::new(module)
+            .name(root)
+            .unwrap_or("<root>"),
+    );
     builder.instantiate(root, inputs, outputs);
 
     // Build the simulation state.
