@@ -3,18 +3,18 @@
 #![allow(dead_code, unused_variables)]
 //! The execution engine that advances the simulation step by step.
 
+use crate::state::{
+    Event, Instance, InstanceKind, InstanceRef, InstanceState, Signal, SignalRef, State,
+    TimedInstance, ValueSlot,
+};
+use crate::tracer::Tracer;
 use llhd::inst::*;
 use llhd::value::BlockRef;
 use llhd::{Const, ConstInt, ConstKind, ConstTime, ProcessContext, ValueId, ValueRef};
 use num::{BigInt, BigUint};
 use rayon::prelude::*;
-use crate::state::{
-    Event, Instance, InstanceKind, InstanceRef, InstanceState, Signal, SignalRef, State,
-    TimedInstance, ValueSlot,
-};
 use std::borrow::BorrowMut;
 use std::collections::{HashMap, HashSet};
-use crate::tracer::Tracer;
 
 pub struct Engine<'ts, 'tm: 'ts> {
     step: usize,
@@ -204,7 +204,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
         values: &HashMap<ValueId, ValueSlot>,
         signals: &[Signal],
     ) -> Action {
-        // println!("executing instruction {:?}", inst);
+        trace!("{:?}", inst);
 
         // Resolves a value ref to a constant time value.
         let resolve_delay = |vr: &ValueRef| -> ConstTime {
