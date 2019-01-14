@@ -56,11 +56,7 @@ fn main() {
     };
 
     // Dump the input file back to the console. Just for reference.
-    {
-        use llhd::visit::Visitor;
-        let stdout = std::io::stdout();
-        llhd::assembly::Writer::new(&mut stdout.lock()).visit_module(&module);
-    }
+    llhd::assembly::write(&mut std::io::stdout().lock(), &module);
 
     // Build the simulation state for this module.
     let mut state = builder::build(&module);

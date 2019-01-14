@@ -4,7 +4,9 @@
 //! design.
 
 use crate::state::*;
-use llhd::{const_zero, inst::*, value::Context, Argument, Module, Type, Value, ValueId, ValueRef};
+use llhd::{
+    const_zero, Argument, Context, InstanceInst, Module, SignalInst, Type, Value, ValueId, ValueRef,
+};
 use std::{collections::HashMap, sync::Mutex};
 
 pub struct Builder<'tm> {

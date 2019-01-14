@@ -83,8 +83,6 @@ impl<'tw> VcdTracer<'tw> {
         let mut probed_signals: Vec<_> = scope.probes.keys().cloned().collect();
         probed_signals.sort();
         for sigref in probed_signals {
-            use llhd::ty::*;
-
             // Allocate short names for the probed signals.
             let probes = &scope.probes[&sigref];
             let names = probes.iter().map(|name| {
@@ -104,7 +102,7 @@ impl<'tw> VcdTracer<'tw> {
             // Determine the VCD type of the signal.
             let signal = state.signal(sigref);
             let ty = match **signal.ty() {
-                IntType(width) => format!("wire {}", width),
+                llhd::IntType(width) => format!("wire {}", width),
                 ref x => panic!("signal of type {} not supported in VCD", x),
             };
 

@@ -13,7 +13,7 @@ license = "Apache-2.0 OR MIT"
 travis-ci = { repository = "fabianschuiki/llhd-sim", branch = "master" }
 
 [dependencies]
-llhd = "0.1"
+llhd = "0.2"
 clap = "2.24.2"
 num = "0.1"
 rayon = "0.7.1"
