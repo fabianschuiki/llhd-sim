@@ -12,14 +12,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## 0.2.0 - 2019-01-13
 ### Added
-- Add `-v` verbosity option
-- Add `stderrlog` and `log` dependencies
-- Support branch instructions
-- Support comparison instructions
+- Add `-v` verbosity option.
+- Add `stderrlog` and `log` dependencies.
+- Support branch instructions.
+- Support comparison instructions.
 
 ### Fixed
-- Preserve process/entity hierarchy in VCD output
+- Preserve process/entity hierarchy in VCD output.
 
 ## 0.1.0 - 2019-01-05
 ### Added
-- Initial release
+- Initial release.
