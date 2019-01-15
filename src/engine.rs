@@ -146,6 +146,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                         match action {
                             Action::None => (),
                             Action::Value(vs) => instance.set_value(inst.as_ref().into(), vs),
+                            Action::Store(ptr, vs) => instance.set_value(ptr, vs),
                             Action::Event(e) => events.push(e),
                             Action::Jump(blk) => {
                                 let blk = prok.body().block(blk);
@@ -182,6 +183,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                     match action {
                         Action::None => (),
                         Action::Value(vs) => instance.set_value(inst.as_ref().into(), vs),
+                        Action::Store(ptr, vs) => instance.set_value(ptr, vs),
                         Action::Event(e) => events.push(e),
                         Action::Jump(..) => panic!("cannot jump in entity"),
                         Action::Suspend(..) => panic!("cannot suspend entity"),
@@ -305,6 +307,11 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                     },
                 )))))
             }
+            VariableInst(ref ty) => Action::Value(ValueSlot::Const(const_zero(ty))),
+            LoadInst(ref ty, ref ptr) => Action::Value(ValueSlot::Const(resolve_value(ptr))),
+            StoreInst(ref ty, ref value, ref ptr) => {
+                Action::Store(ptr.id().unwrap(), ValueSlot::Const(resolve_value(value)))
+            }
 
             // Signal and instance instructions are simply ignored, as they are
             // handled by the builder and only occur in entities.
@@ -353,6 +360,9 @@ enum Action {
     /// Change the instruction's entry in the value table. Used by instructions
     /// that yield a value to change that value.
     Value(ValueSlot),
+    /// Change another value's entry in the value table. Used bt instructions
+    /// to simulate writing to memory.
+    Store(ValueId, ValueSlot),
     /// Add an event to the event queue.
     Event(Event),
     /// Transfer control to a different block, executing that block's

@@ -1,0 +1,11 @@
+proc @variables () (i8$ %out) {
+%entry:
+	%0 = var i8
+	store i8 42 %0
+	%1 = load i8 %0
+	store i8 9001 %0
+	%2 = load i8 %0
+	drv %out %1 1ns
+	drv %out %2 2ns
+	halt
+}
