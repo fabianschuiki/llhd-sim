@@ -17,7 +17,9 @@ use std::io::prelude::*;
 fn main() {
     // Parse the command line arguments.
     let matches = App::new("llhd-sim")
-        .about("Simulates low level hardware description files.")
+        .version(clap::crate_version!())
+        .author(clap::crate_authors!())
+        .about(clap::crate_description!())
         .arg(
             Arg::with_name("verbosity")
                 .short("v")
