@@ -276,14 +276,16 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
             )),
 
             UnaryInst(op, _, ref arg) => Action::Value(ValueSlot::Const(Const::new(
-                ConstKind::Int(execute_unary(op, resolve_value(arg).as_int())),
+                ConstKind::Int(execute_unary(op, resolve_value(arg).unwrap_int())),
             ))),
 
-            BinaryInst(op, _, ref lhs, ref rhs) => {
-                Action::Value(ValueSlot::Const(Const::new(ConstKind::Int(
-                    execute_binary(op, resolve_value(lhs).as_int(), resolve_value(rhs).as_int()),
-                ))))
-            }
+            BinaryInst(op, _, ref lhs, ref rhs) => Action::Value(ValueSlot::Const(Const::new(
+                ConstKind::Int(execute_binary(
+                    op,
+                    resolve_value(lhs).unwrap_int(),
+                    resolve_value(rhs).unwrap_int(),
+                )),
+            ))),
 
             BranchInst(BranchKind::Uncond(block)) => Action::Jump(block),
             BranchInst(BranchKind::Cond(ref cond, if_true, if_false)) => {
@@ -299,8 +301,8 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                     1,
                     match execute_comparison(
                         op,
-                        resolve_value(lhs).as_int(),
-                        resolve_value(rhs).as_int(),
+                        resolve_value(lhs).unwrap_int(),
+                        resolve_value(rhs).unwrap_int(),
                     ) {
                         false => 0.into(),
                         true => 1.into(),
@@ -344,11 +346,10 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
 
     /// Calculate the absolute time of the next delta step.
     fn time_after_delta(&self) -> ConstTime {
-        use num::{zero, BigInt};
         ConstTime::new(
             self.state.time().time().clone(),
-            self.state.time().delta() + BigInt::from(1),
-            zero(),
+            self.state.time().delta() + 1,
+            num::zero(),
         )
     }
 }

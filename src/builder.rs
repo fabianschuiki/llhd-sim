@@ -167,11 +167,11 @@ pub fn build(module: &Module) -> State {
     // Allocate the input and output signals for the top-level module.
     let inputs: Vec<_> = unit_inputs(&module, root)
         .iter()
-        .map(|arg| builder.alloc_signal(arg.ty().as_signal(), None))
+        .map(|arg| builder.alloc_signal(arg.ty().unwrap_signal(), None))
         .collect();
     let outputs: Vec<_> = unit_outputs(&module, root)
         .iter()
-        .map(|arg| builder.alloc_signal(arg.ty().as_signal(), None))
+        .map(|arg| builder.alloc_signal(arg.ty().unwrap_signal(), None))
         .collect();
 
     // Instantiate the top-level module.

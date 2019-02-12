@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Add support for `var`, `load`, and `store` instructions.
 
 ### Changed
-- Update llhd to v0.3.0.
+- Update llhd to v0.4.0.
 - Improve command line help page.
 
 ## 0.2.0 - 2019-01-13
