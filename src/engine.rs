@@ -9,7 +9,7 @@ use crate::state::{
 };
 use crate::tracer::Tracer;
 use llhd::*;
-use num::{BigInt, BigUint};
+use num::{BigInt, BigUint, ToPrimitive};
 use rayon::prelude::*;
 use std::borrow::BorrowMut;
 use std::collections::{HashMap, HashSet};
@@ -314,6 +314,16 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
             StoreInst(ref ty, ref value, ref ptr) => {
                 Action::Store(ptr.id().unwrap(), ValueSlot::Const(resolve_value(value)))
             }
+            ShiftInst(dir, ref ty, ref target, ref insert, ref amount) if ty.is_int() => {
+                Action::Value(ValueSlot::Const(Const::new(ConstKind::Int(
+                    execute_shift_int(
+                        dir,
+                        resolve_value(target).unwrap_int(),
+                        resolve_value(insert).unwrap_int(),
+                        resolve_value(amount).unwrap_int(),
+                    ),
+                ))))
+            }
 
             // Signal and instance instructions are simply ignored, as they are
             // handled by the builder and only occur in entities.
@@ -385,7 +395,6 @@ fn execute_unary(op: UnaryOp, arg: &ConstInt) -> ConstInt {
 
 fn execute_binary(op: BinaryOp, lhs: &ConstInt, rhs: &ConstInt) -> ConstInt {
     use num::Integer;
-    use num::ToPrimitive;
     use std::ops::Rem;
     ConstInt::new(
         lhs.width(),
@@ -396,8 +405,6 @@ fn execute_binary(op: BinaryOp, lhs: &ConstInt, rhs: &ConstInt) -> ConstInt {
             BinaryOp::Div => lhs.value() / rhs.value(),
             BinaryOp::Mod => lhs.value().mod_floor(rhs.value()),
             BinaryOp::Rem => lhs.value().rem(rhs.value()),
-            BinaryOp::Shl => lhs.value() << rhs.value().to_usize().expect("shift amount too large"),
-            BinaryOp::Shr => lhs.value() >> rhs.value().to_usize().expect("shift amount too large"),
             BinaryOp::And => {
                 bigint_bitwise_binary(lhs.width(), lhs.value(), rhs.value(), |lhs, rhs| lhs & rhs)
             }
@@ -488,4 +495,22 @@ fn execute_comparison(op: CompareOp, lhs: &ConstInt, rhs: &ConstInt) -> bool {
             make_unsigned(lhs.width(), lhs.value()) >= make_unsigned(rhs.width(), rhs.value())
         }
     }
+}
+
+/// Execute a shift instruction on an integer target.
+fn execute_shift_int(
+    dir: ShiftDir,
+    target: &ConstInt,
+    insert: &ConstInt,
+    amount: &ConstInt,
+) -> ConstInt {
+    let shifted = match dir {
+        ShiftDir::Left => {
+            target.value() << amount.value().to_usize().expect("shift amount too large")
+        }
+        ShiftDir::Right => {
+            target.value() >> amount.value().to_usize().expect("shift amount too large")
+        }
+    };
+    ConstInt::new(target.width(), shifted)
 }
