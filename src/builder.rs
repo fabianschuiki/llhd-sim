@@ -34,7 +34,7 @@ impl<'tm> Builder<'tm> {
         let r = SignalRef::new(self.signals.len());
         self.signals.push(Signal::new(
             ty.clone(),
-            init.map(|v| v.as_const().clone())
+            init.map(|v| -> ValueRef { v.as_const().clone().into() })
                 .unwrap_or_else(|| const_zero(ty)),
         ));
         r

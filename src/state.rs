@@ -2,7 +2,7 @@
 
 //! The simulation state.
 
-use llhd::{Block, Const, ConstTime, Entity, Module, ModuleContext, Process, Type, ValueId};
+use llhd::{Block, ConstTime, Entity, Module, ModuleContext, Process, Type, ValueId, ValueRef};
 use num::zero;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
@@ -188,12 +188,12 @@ impl SignalRef {
 
 pub struct Signal {
     ty: Type,
-    value: Const,
+    value: ValueRef,
 }
 
 impl Signal {
     /// Create a new signal.
-    pub fn new(ty: Type, value: Const) -> Signal {
+    pub fn new(ty: Type, value: ValueRef) -> Signal {
         Signal {
             ty: ty,
             value: value,
@@ -206,13 +206,13 @@ impl Signal {
     }
 
     /// Get the signal's current value.
-    pub fn value(&self) -> &Const {
+    pub fn value(&self) -> &ValueRef {
         &self.value
     }
 
     /// Change the signal's current value. Returns whether the values were
     /// identical.
-    pub fn set_value(&mut self, value: Const) -> bool {
+    pub fn set_value(&mut self, value: ValueRef) -> bool {
         if self.value != value {
             self.value = value;
             true
@@ -293,7 +293,7 @@ impl<'tm> Instance<'tm> {
 #[derive(Debug)]
 pub enum ValueSlot {
     Signal(SignalRef),
-    Const(Const),
+    Const(ValueRef),
 }
 
 pub enum InstanceKind<'tm> {
@@ -330,7 +330,7 @@ impl InstanceRef {
 pub struct Event {
     pub time: ConstTime,
     pub signal: SignalRef,
-    pub value: Const,
+    pub value: ValueRef,
 }
 
 impl Ord for Event {

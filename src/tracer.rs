@@ -3,7 +3,7 @@
 //! A simulation tracer that can store the generated waveform to disk.
 
 use crate::state::{Scope, SignalRef, State};
-use llhd::{Const, ConstKind};
+use llhd::{AggregateKind, ConstKind, ValueRef};
 use num::{BigInt, BigRational};
 use std;
 use std::collections::{HashMap, HashSet};
@@ -35,7 +35,7 @@ pub struct VcdTracer<'tw> {
     writer: &'tw mut std::io::Write,
     abbrevs: HashMap<SignalRef, Vec<(String, String)>>,
     time: BigRational,
-    pending: HashMap<SignalRef, Const>,
+    pending: HashMap<SignalRef, ValueRef>,
     precision: BigRational,
 }
 
@@ -67,10 +67,20 @@ impl<'tw> VcdTracer<'tw> {
     /// Write the value of a signal. Called at the beginning of the simulation
     /// to perform a variable dump, and during flush once for each signal that
     /// changed.
-    fn flush_signal(&mut self, signal: SignalRef, value: &Const) {
-        let value = match **value {
-            ConstKind::Int(ref k) => format!("b{:b}", k.value()),
-            ConstKind::Time(_) => panic!("time not supported in VCD"),
+    fn flush_signal(&mut self, signal: SignalRef, value: &ValueRef) {
+        let value = match *value {
+            ValueRef::Const(ref k) => match **k {
+                ConstKind::Int(ref k) => format!("b{:b}", k.value()),
+                ConstKind::Time(_) => panic!("time not supported in VCD"),
+            },
+            ValueRef::Aggregate(ref a) => match **a {
+                AggregateKind::Array(_) => format!("<array>"),
+                AggregateKind::Struct(_) => format!("<struct>"),
+            },
+            _ => panic!(
+                "flush non-const/non-aggregate signal {:?} with value {:?}",
+                signal, value
+            ),
         };
         for &(ref abbrev, _) in &self.abbrevs[&signal] {
             write!(self.writer, "{} {}\n", value, abbrev).unwrap();
@@ -103,6 +113,8 @@ impl<'tw> VcdTracer<'tw> {
             let signal = state.signal(sigref);
             let ty = match **signal.ty() {
                 llhd::IntType(width) => format!("wire {}", width),
+                llhd::ArrayType(..) => format!("wire 0"),
+                llhd::StructType(..) => format!("wire 0"),
                 ref x => panic!("signal of type {} not supported in VCD", x),
             };
 

@@ -228,18 +228,20 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
         // Resolves a value ref to a constant value. This is the main function
         // that allows the value of individual nodes in a process/entity to be
         // determined for processing.
-        let resolve_value = |vr: &ValueRef| -> Const {
-            if let ValueRef::Const(ref k) = *vr {
-                k.clone()
-            } else {
-                match values[&vr.id().unwrap()] {
+        let resolve_value = |vr: &ValueRef| -> ValueRef {
+            match *vr {
+                ValueRef::Const(_) | ValueRef::Aggregate(_) => vr.clone(),
+                _ => match values[&vr.id().unwrap()] {
                     ValueSlot::Const(ref k) => k.clone(),
-                    ref x => panic!("expected value to resolve to a constant, got {:?}", x),
-                }
+                    ref x => panic!(
+                        "expected value {:?} to resolve to a constant/aggregate, got {:?}",
+                        vr, x
+                    ),
+                },
             }
         };
 
-        match *inst.kind() {
+        let action = match *inst.kind() {
             // For the drive instruction we assemble a new event for the queue.
             // The absolute time of the event is calculated either from the
             // delay given by the instruction, or as a single delta step. The
@@ -275,39 +277,49 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                 signals[resolve_signal(signal).as_usize()].value().clone(),
             )),
 
-            UnaryInst(op, _, ref arg) => Action::Value(ValueSlot::Const(Const::new(
-                ConstKind::Int(execute_unary(op, resolve_value(arg).unwrap_int())),
-            ))),
-
-            BinaryInst(op, _, ref lhs, ref rhs) => Action::Value(ValueSlot::Const(Const::new(
-                ConstKind::Int(execute_binary(
+            UnaryInst(op, ref ty, ref arg) if ty.is_int() => Action::Value(ValueSlot::Const(
+                Const::new(ConstKind::Int(execute_unary(
                     op,
-                    resolve_value(lhs).unwrap_int(),
-                    resolve_value(rhs).unwrap_int(),
-                )),
-            ))),
+                    resolve_value(arg).unwrap_const().unwrap_int(),
+                )))
+                .into(),
+            )),
+
+            BinaryInst(op, ref ty, ref lhs, ref rhs) if ty.is_int() => {
+                Action::Value(ValueSlot::Const(
+                    Const::new(ConstKind::Int(execute_binary(
+                        op,
+                        resolve_value(lhs).unwrap_const().unwrap_int(),
+                        resolve_value(rhs).unwrap_const().unwrap_int(),
+                    )))
+                    .into(),
+                ))
+            }
 
             BranchInst(BranchKind::Uncond(block)) => Action::Jump(block),
             BranchInst(BranchKind::Cond(ref cond, if_true, if_false)) => {
                 let v = resolve_value(cond);
-                if v == llhd::const_int(1, 1.into()) {
+                if v.unwrap_const() == &llhd::const_int(1, 1.into()) {
                     Action::Jump(if_true)
                 } else {
                     Action::Jump(if_false)
                 }
             }
-            CompareInst(op, _, ref lhs, ref rhs) => {
-                Action::Value(ValueSlot::Const(Const::new(ConstKind::Int(ConstInt::new(
-                    1,
-                    match execute_comparison(
-                        op,
-                        resolve_value(lhs).unwrap_int(),
-                        resolve_value(rhs).unwrap_int(),
-                    ) {
-                        false => 0.into(),
-                        true => 1.into(),
-                    },
-                )))))
+            CompareInst(op, ref ty, ref lhs, ref rhs) if ty.is_int() => {
+                Action::Value(ValueSlot::Const(
+                    Const::new(ConstKind::Int(ConstInt::new(
+                        1,
+                        match execute_comparison(
+                            op,
+                            resolve_value(lhs).unwrap_const().unwrap_int(),
+                            resolve_value(rhs).unwrap_const().unwrap_int(),
+                        ) {
+                            false => 0.into(),
+                            true => 1.into(),
+                        },
+                    )))
+                    .into(),
+                ))
             }
             VariableInst(ref ty) => Action::Value(ValueSlot::Const(const_zero(ty))),
             LoadInst(ref ty, ref ptr) => Action::Value(ValueSlot::Const(resolve_value(ptr))),
@@ -315,14 +327,23 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                 Action::Store(ptr.id().unwrap(), ValueSlot::Const(resolve_value(value)))
             }
             ShiftInst(dir, ref ty, ref target, ref insert, ref amount) if ty.is_int() => {
-                Action::Value(ValueSlot::Const(Const::new(ConstKind::Int(
-                    execute_shift_int(
+                trace!(
+                    "executing shift {:?} on ty {:?}, target {:?}, insert {:?}, amount {:?}",
+                    dir,
+                    ty,
+                    target,
+                    insert,
+                    amount
+                );
+                Action::Value(ValueSlot::Const(
+                    Const::new(ConstKind::Int(execute_shift_int(
                         dir,
-                        resolve_value(target).unwrap_int(),
-                        resolve_value(insert).unwrap_int(),
-                        resolve_value(amount).unwrap_int(),
-                    ),
-                ))))
+                        resolve_value(target).unwrap_const().unwrap_int(),
+                        resolve_value(insert).unwrap_const().unwrap_int(),
+                        resolve_value(amount).unwrap_const().unwrap_int(),
+                    )))
+                    .into(),
+                ))
             }
 
             // Signal and instance instructions are simply ignored, as they are
@@ -331,7 +352,9 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
 
             HaltInst => Action::Suspend(None, InstanceState::Done),
             _ => panic!("unsupported instruction {:#?}", inst),
-        }
+        };
+
+        action
     }
 
     /// Calculate the time at which an event occurs, given an optional delay. If
@@ -365,13 +388,14 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
 }
 
 /// An action to be taken as the result of an instruction's execution.
+#[derive(Debug)]
 enum Action {
     /// No action.
     None,
     /// Change the instruction's entry in the value table. Used by instructions
     /// that yield a value to change that value.
     Value(ValueSlot),
-    /// Change another value's entry in the value table. Used bt instructions
+    /// Change another value's entry in the value table. Used by instructions
     /// to simulate writing to memory.
     Store(ValueId, ValueSlot),
     /// Add an event to the event queue.
@@ -382,6 +406,18 @@ enum Action {
     /// Suspend execution of the current instance and change the instance's
     /// state.
     Suspend(Option<BlockRef>, InstanceState),
+}
+
+impl std::fmt::Display for Action {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match *self {
+            Action::None => write!(f, "<no action>"),
+            Action::Value(ref v) => write!(f, "= {:?}", v),
+            Action::Store(id, ref v) => write!(f, "*i{} = {:?}", id, v),
+            Action::Event(ref ev) => write!(f, "@{} {:?} <= {:?}", ev.time, ev.signal, ev.value),
+            Action::Jump(..) | Action::Suspend(..) => write!(f, "{:?}", self),
+        }
+    }
 }
 
 fn execute_unary(op: UnaryOp, arg: &ConstInt) -> ConstInt {
