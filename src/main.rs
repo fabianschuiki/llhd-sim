@@ -27,6 +27,12 @@ fn main() {
                 .help("Increase message verbosity"),
         )
         .arg(
+            Arg::with_name("sequential")
+                .short("s")
+                .long("sequential")
+                .help("Disable parallelization"),
+        )
+        .arg(
             Arg::with_name("INPUT")
                 .help("The input file to simulate")
                 .required(true)
@@ -70,7 +76,7 @@ fn main() {
 
     // Create the simulation engine and run the simulation to completion.
     {
-        let mut engine = Engine::new(&mut state);
+        let mut engine = Engine::new(&mut state, !matches.is_present("sequential"));
         engine.run(&mut tracer);
     }
 

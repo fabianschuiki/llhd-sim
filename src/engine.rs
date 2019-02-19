@@ -17,14 +17,16 @@ use std::collections::{HashMap, HashSet};
 pub struct Engine<'ts, 'tm: 'ts> {
     step: usize,
     state: &'ts mut State<'tm>,
+    parallelize: bool,
 }
 
 impl<'ts, 'tm> Engine<'ts, 'tm> {
     /// Create a new engine to advance some simulation state.
-    pub fn new(state: &'ts mut State<'tm>) -> Engine<'ts, 'tm> {
+    pub fn new(state: &'ts mut State<'tm>, parallelize: bool) -> Engine<'ts, 'tm> {
         Engine {
             step: 0,
-            state: state,
+            state,
+            parallelize,
         }
     }
 
@@ -86,19 +88,28 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
             .map(|(i, _)| i)
             .collect();
         // println!("ready_insts: {:?}", ready_insts);
-        let events = ready_insts
-            .par_iter()
-            .map(|index| {
-                let mut lk = self.state.instances()[*index].lock().unwrap();
-                self.step_instance(lk.borrow_mut())
-            })
-            .reduce(
-                || Vec::new(),
-                |mut a, b| {
-                    a.extend(b);
-                    a
-                },
-            );
+        let events = if self.parallelize {
+            ready_insts
+                .par_iter()
+                .map(|&index| {
+                    let mut lk = self.state.instances()[index].lock().unwrap();
+                    self.step_instance(lk.borrow_mut())
+                })
+                .reduce(
+                    || Vec::new(),
+                    |mut a, b| {
+                        a.extend(b);
+                        a
+                    },
+                )
+        } else {
+            let mut events = Vec::new();
+            for &index in &ready_insts {
+                let mut lk = self.state.instances()[index].lock().unwrap();
+                events.extend(self.step_instance(lk.borrow_mut()));
+            }
+            events
+        };
         self.state.schedule_events(events.into_iter());
 
         // Gather a list of instances that perform a timed wait and schedule
