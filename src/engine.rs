@@ -215,8 +215,6 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
         values: &HashMap<ValueId, ValueSlot>,
         signals: &[Signal],
     ) -> Action {
-        trace!("{:?}", inst);
-
         // Resolves a value ref to a constant time value.
         let resolve_delay = |vr: &ValueRef| -> ConstTime {
             match *vr {
@@ -365,6 +363,13 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
             _ => panic!("unsupported instruction {:#?}", inst),
         };
 
+        trace!(
+            "[{}] i{}: {} # {:?}",
+            self.state.time(),
+            llhd::ValueId::from(inst.as_ref().into()),
+            action,
+            inst.kind()
+        );
         action
     }
 
