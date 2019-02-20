@@ -331,8 +331,10 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                 ))
             }
             VariableInst(ref ty) => Action::Value(ValueSlot::Const(const_zero(ty))),
-            LoadInst(ref ty, ref ptr) => Action::Value(ValueSlot::Const(resolve_value(ptr))),
-            StoreInst(ref ty, ref value, ref ptr) => {
+            LoadInst(ref ty, ref ptr) => {
+                Action::Value(ValueSlot::Const(resolve_value(ptr)))
+            }
+            StoreInst(ref ty, ref ptr, ref value) => {
                 Action::Store(ptr.id().unwrap(), ValueSlot::Const(resolve_value(value)))
             }
             ShiftInst(dir, ref ty, ref target, ref insert, ref amount) if ty.is_int() => {
