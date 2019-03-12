@@ -536,6 +536,54 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                     _ => unreachable!(),
                 })
             }
+            InsertInst(ref ty, ref target, SliceMode::Element(index), ref value) if ty.is_int() => {
+                let target = resolve_value(target);
+                let value = resolve_value(value);
+                let target = target.unwrap_const().unwrap_int().value();
+                let value = value.unwrap_const().unwrap_int().value();
+                let bit = ((target >> index) % 2) << index;
+                let result = (target - bit) + ((value % 2) << index);
+                Action::Value(ValueSlot::Const(const_int(ty.unwrap_int(), result).into()))
+            }
+            InsertInst(ref ty, ref target, SliceMode::Slice(offset, length), ref value)
+                if ty.is_int() =>
+            {
+                let target = resolve_value(target);
+                let value = resolve_value(value);
+                let target = target.unwrap_const().unwrap_int().value();
+                let value = value.unwrap_const().unwrap_int().value();
+                let modulus = BigInt::one() << length;
+                let bits = ((target >> offset) % &modulus) << offset;
+                let result = (target - bits) + ((value % modulus) << offset);
+                Action::Value(ValueSlot::Const(const_int(ty.unwrap_int(), result).into()))
+            }
+            InsertInst(ref ty, ref target, SliceMode::Element(index), ref value)
+                if ty.is_struct() =>
+            {
+                let mut fields = match **resolve_value(target).unwrap_aggregate() {
+                    AggregateKind::Struct(ref sa) => Vec::from(sa.fields()),
+                    ref a => panic!("target of struct insert is not a struct; got {:?}", a),
+                };
+                fields[index] = resolve_value(value);
+                Action::Value(ValueSlot::Const(const_struct(fields)))
+            }
+            InsertInst(ref ty, ref target, mode, ref value) if ty.is_array() => {
+                let target = resolve_value(target);
+                let mut elems = match **target.unwrap_aggregate() {
+                    AggregateKind::Array(ref a) => a.elements().to_vec(),
+                    ref a => panic!("target of array insert is not an array; got {:?}", a),
+                };
+                match mode {
+                    SliceMode::Element(i) => elems[i] = resolve_value(value),
+                    SliceMode::Slice(o, l) => match **resolve_value(value).unwrap_aggregate() {
+                        AggregateKind::Array(ref a) => {
+                            elems[o..o + l].clone_from_slice(a.elements())
+                        }
+                        ref a => panic!("value of array insert is not an array; got {:?}", a),
+                    },
+                };
+                Action::Value(ValueSlot::Const(const_array(ty.clone(), elems)))
+            }
 
             // Signal and instance instructions are simply ignored, as they are
             // handled by the builder and only occur in entities.
