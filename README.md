@@ -3,28 +3,33 @@
 [![Build Status](https://travis-ci.org/fabianschuiki/llhd-sim.svg?branch=master)](https://travis-ci.org/fabianschuiki/llhd-sim)
 [![Crates.io](https://img.shields.io/crates/v/llhd-sim.svg)](https://crates.io/crates/llhd-sim)
 
-This is the reference simulator for [LLHD], striving to be complete but as minimal as possible. Its goal is to serve as a starting point for developing more sophisticated simulators for hardware written in LLHD. As a secondary goal it acts as an application example of LLHD.
+This is the reference simulator for [llhd], striving to be complete but as minimal as possible. Its goal is to serve as a starting point for developing more sophisticated simulators for hardware written in llhd. As a secondary goal it acts as an application example of llhd.
 
-[LLHD]: https://github.com/fabianschuiki/llhd
+## Usage
 
+### Installation
 
-## Roadmap and Milestones
+You need a working [Rust installation](https://rustup.rs/). Use cargo to install llhd-sim:
 
-- [x] execute processes
-- [x] execute entities
-- [ ] execute functions
-- [x] unary, binary instructions
-- [x] probe, drive instructions
-- [ ] call instruction
-- [x] sig, inst instructions
-- [ ] compare instruction
-- [ ] return, branch instructions
-- [ ] preserve hierarchy in VCD
-- **Milestone:** basic simulator
-- [ ] run simulation for limited time
-- [ ] set breakpoints in processes/functions
-- [ ] set breakpoints in entities
-- [ ] step over, step into
-- [ ] list source code extract, print values/signals
-- [ ] interactive prompt
-- **Milestone:** interactive debugger
+    cargo install llhd-sim
+
+### Example
+
+Given the following input file:
+
+    // foo.llhd
+    proc @foo () (i32$ %out) {
+    %entry:
+        drv %out 0 1ns
+        drv %out 42 2ns
+        %0 = add i32 9000 1
+        drv %out %0 3ns
+        halt
+    }
+
+Use llhd-sim to simulate the described hardware and produce a VCD file:
+
+    llhd-sim foo.llhd
+    gtkwave /tmp/output.vcd
+
+[llhd]: https://github.com/fabianschuiki/llhd
