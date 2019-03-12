@@ -12,6 +12,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Update llhd to v0.5.0.
 - Improve command line help page.
 
+### Fixed
+- Structs and arrays are now properly unrolled in VCD output. ([#3](https://github.com/fabianschuiki/llhd-sim/issues/3))
+
 ## 0.2.0 - 2019-01-13
 ### Added
 - Add `-v` verbosity option.

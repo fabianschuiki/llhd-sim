@@ -5,8 +5,10 @@
 use crate::state::{Scope, SignalRef, State};
 use llhd::{AggregateKind, ConstKind, ValueRef};
 use num::{BigInt, BigRational};
-use std;
-use std::collections::{HashMap, HashSet};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+};
 
 /// A simulation tracer that can operate on the simulation trace as it is being
 /// generated.
@@ -32,8 +34,8 @@ impl Tracer for NoopTracer {
 
 /// A tracer that emits the simulation trace as VCD.
 pub struct VcdTracer<'tw> {
-    writer: &'tw mut std::io::Write,
-    abbrevs: HashMap<SignalRef, Vec<(String, String)>>,
+    writer: RefCell<&'tw mut std::io::Write>,
+    abbrevs: HashMap<SignalRef, Vec<(String, String, usize)>>,
     time: BigRational,
     pending: HashMap<SignalRef, ValueRef>,
     precision: BigRational,
@@ -44,7 +46,7 @@ impl<'tw> VcdTracer<'tw> {
     pub fn new(writer: &'tw mut std::io::Write) -> VcdTracer {
         use num::zero;
         VcdTracer {
-            writer: writer,
+            writer: RefCell::new(writer),
             abbrevs: HashMap::new(),
             time: zero(),
             pending: HashMap::new(),
@@ -58,94 +60,159 @@ impl<'tw> VcdTracer<'tw> {
     /// Clears the `pending` set.
     fn flush(&mut self) {
         let time = (&self.time * &self.precision).trunc();
-        write!(self.writer, "#{}\n", time).unwrap();
+        write!(self.writer.borrow_mut(), "#{}\n", time).unwrap();
         for (signal, value) in std::mem::replace(&mut self.pending, HashMap::new()) {
-            self.flush_signal(signal, &value);
+            for &(ref abbrev, _, offset) in &self.abbrevs[&signal] {
+                self.flush_signal(signal, offset, &value, abbrev);
+            }
         }
     }
 
     /// Write the value of a signal. Called at the beginning of the simulation
     /// to perform a variable dump, and during flush once for each signal that
     /// changed.
-    fn flush_signal(&mut self, signal: SignalRef, value: &ValueRef) {
-        let value = match *value {
+    fn flush_signal(&self, signal: SignalRef, offset: usize, value: &ValueRef, abbrev: &str) {
+        match *value {
             ValueRef::Const(ref k) => match **k {
-                ConstKind::Int(ref k) => format!("b{:b}", k.value()),
+                ConstKind::Int(ref k) => {
+                    assert_eq!(offset, 0);
+                    write!(self.writer.borrow_mut(), "b{:b} {}\n", k.value(), abbrev).unwrap();
+                }
                 ConstKind::Time(_) => panic!("time not supported in VCD"),
             },
             ValueRef::Aggregate(ref a) => match **a {
-                AggregateKind::Array(_) => format!("<array>"),
-                AggregateKind::Struct(_) => format!("<struct>"),
+                AggregateKind::Array(ref a) => {
+                    let elems = a.elements();
+                    self.flush_signal(
+                        signal,
+                        offset / elems.len(),
+                        &elems[offset % elems.len()],
+                        abbrev,
+                    );
+                }
+                AggregateKind::Struct(ref a) => {
+                    let fields = a.fields();
+                    self.flush_signal(
+                        signal,
+                        offset / fields.len(),
+                        &fields[offset % fields.len()],
+                        abbrev,
+                    );
+                }
             },
             _ => panic!(
                 "flush non-const/non-aggregate signal {:?} with value {:?}",
                 signal, value
             ),
         };
-        for &(ref abbrev, _) in &self.abbrevs[&signal] {
-            write!(self.writer, "{} {}\n", value, abbrev).unwrap();
-        }
     }
 
     /// Allocate short names and emit `$scope` statement.
     fn prepare_scope(&mut self, state: &State, scope: &Scope, index: &mut usize) {
-        write!(self.writer, "$scope module {} $end\n", scope.name).unwrap();
+        write!(
+            self.writer.borrow_mut(),
+            "$scope module {} $end\n",
+            scope.name
+        )
+        .unwrap();
         let mut probed_signals: Vec<_> = scope.probes.keys().cloned().collect();
         probed_signals.sort();
         for sigref in probed_signals {
-            // Allocate short names for the probed signals.
-            let probes = &scope.probes[&sigref];
-            let names = probes.iter().map(|name| {
+            for name in &scope.probes[&sigref] {
+                self.prepare_signal(state, sigref, state.signal(sigref).ty(), name, index, 0, 1);
+            }
+        }
+        for subscope in scope.subscopes.iter() {
+            self.prepare_scope(state, subscope, index);
+        }
+        write!(self.writer.borrow_mut(), "$upscope $end\n").unwrap();
+    }
+
+    /// Expand signals and allocate short names.
+    fn prepare_signal(
+        &mut self,
+        state: &State,
+        sigref: SignalRef,
+        ty: &llhd::Type,
+        name: &str,
+        index: &mut usize,
+        offset: usize,
+        stride: usize,
+    ) {
+        match **ty {
+            llhd::IntType(width) => {
+                // Allocate short name for the probed signal.
+                debug!("prepare_signal {:?} {:?} {}", sigref, name, offset);
                 let mut idx = *index;
-                let mut id = String::new();
+                let mut abbrev = String::new();
                 loop {
-                    id.push((33 + idx % 94) as u8 as char);
+                    abbrev.push((33 + idx % 94) as u8 as char);
                     idx /= 94;
                     if idx == 0 {
                         break;
                     }
                 }
                 *index += 1;
-                (id, name.clone())
-            });
 
-            // Determine the VCD type of the signal.
-            let signal = state.signal(sigref);
-            let ty = match **signal.ty() {
-                llhd::IntType(width) => format!("wire {}", width),
-                llhd::ArrayType(..) => format!("wire 0"),
-                llhd::StructType(..) => format!("wire 0"),
-                ref x => panic!("signal of type {} not supported in VCD", x),
-            };
-
-            // Write the abbreviations for this signal.
-            let abbrevs_for_signal = self.abbrevs.entry(sigref).or_insert_with(Vec::new);
-            for (abbrev, probe) in names {
-                write!(self.writer, "$var {} {} {} $end\n", ty, abbrev, probe).unwrap();
-                abbrevs_for_signal.push((abbrev, probe));
+                // Write the abbreviations for this signal.
+                let abbrevs_for_signal = self.abbrevs.entry(sigref).or_insert_with(Vec::new);
+                write!(
+                    self.writer.borrow_mut(),
+                    "$var wire {} {} {} $end\n",
+                    width,
+                    abbrev,
+                    name
+                )
+                .unwrap();
+                abbrevs_for_signal.push((abbrev, name.to_owned(), offset));
             }
+            llhd::ArrayType(width, ref subty) => {
+                for i in 0..width {
+                    self.prepare_signal(
+                        state,
+                        sigref,
+                        subty,
+                        &format!("{}[{}]", name, i),
+                        index,
+                        offset + i * stride,
+                        stride * width,
+                    );
+                }
+            }
+            llhd::StructType(ref fields) => {
+                for (i, subty) in fields.iter().enumerate() {
+                    self.prepare_signal(
+                        state,
+                        sigref,
+                        subty,
+                        &format!("{}.{}", name, i),
+                        index,
+                        offset + i * stride,
+                        stride * fields.len(),
+                    );
+                }
+            }
+            ref x => panic!("signal of type {} not supported in VCD", x),
         }
-        for subscope in scope.subscopes.iter() {
-            self.prepare_scope(state, subscope, index);
-        }
-        write!(self.writer, "$upscope $end\n").unwrap();
     }
 }
 
 impl<'tw> Tracer for VcdTracer<'tw> {
     fn init(&mut self, state: &State) {
         // Dump the VCD header.
-        write!(self.writer, "$version\nllhd-sim\n$end\n").unwrap();
-        write!(self.writer, "$timescale 1ps $end\n").unwrap();
+        write!(self.writer.borrow_mut(), "$version\nllhd-sim\n$end\n").unwrap();
+        write!(self.writer.borrow_mut(), "$timescale 1ps $end\n").unwrap();
         self.prepare_scope(state, state.scope(), &mut 0);
-        write!(self.writer, "$enddefinitions $end\n").unwrap();
+        write!(self.writer.borrow_mut(), "$enddefinitions $end\n").unwrap();
 
         // Dump the variables.
-        write!(self.writer, "$dumpvars\n").unwrap();
+        write!(self.writer.borrow_mut(), "$dumpvars\n").unwrap();
         for &signal in state.probes().keys() {
-            self.flush_signal(signal, state.signal(signal).value());
+            for &(ref abbrev, _, offset) in &self.abbrevs[&signal] {
+                self.flush_signal(signal, offset, state.signal(signal).value(), abbrev);
+            }
         }
-        write!(self.writer, "$end\n").unwrap();
+        write!(self.writer.borrow_mut(), "$end\n").unwrap();
     }
 
     fn step(&mut self, state: &State, changed: &HashSet<SignalRef>) {
