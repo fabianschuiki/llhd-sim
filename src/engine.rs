@@ -55,6 +55,9 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
             let s = stringify_value(&modified);
             if self.state.signal_mut(signal.target).set_value(modified) {
                 changed_signals.insert(signal.target);
+                for p in &self.state.probes()[&signal.target] {
+                    trace!("[{}] {} = {}", self.state.time(), p, s);
+                }
             }
         }
 
@@ -62,6 +65,11 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
         let timed = self.state.take_next_timed();
         for TimedInstance { inst, .. } in timed {
             // println!("timed wake up of {:?}", inst);
+            trace!(
+                "[{}] wakeup {}",
+                self.state.time(),
+                self.state.instance(inst).lock().unwrap().name(),
+            );
             self.state
                 .instance(inst)
                 .lock()
@@ -117,6 +125,12 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
             }
             events
         };
+        for event in &events {
+            let s = stringify_value(&event.value);
+            for p in &self.state.probes()[&event.signal.target] {
+                trace!("[{}] {} = {} @[{}]", self.state.time(), p, s, event.time);
+            }
+        }
         self.state.schedule_events(events.into_iter());
 
         // Gather a list of instances that perform a timed wait and schedule
@@ -153,6 +167,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                 prok,
                 mut next_block,
             } => {
+                trace!("[{}] step process {}", self.state.time(), prok.name());
                 let ctx = ProcessContext::new(self.state.context(), prok);
                 let mut events = Vec::new();
                 // println!("stepping process {}, block {:?}", prok.name(), next_block.map(|b| b.name()));
@@ -200,6 +215,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
             }
 
             InstanceKind::Entity { entity } => {
+                trace!("[{}] step entity {}", self.state.time(), entity.name());
                 // let ctx = EntityContext::new(self.state.context(), entity);
                 let mut events = Vec::new();
                 for inst in entity.insts() {
@@ -409,14 +425,6 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                 Action::Store(resolve_variable_pointer(ptr), resolve_value(value))
             }
             ShiftInst(dir, ref ty, ref target, ref insert, ref amount) if ty.is_int() => {
-                trace!(
-                    "executing shift {:?} on ty {:?}, target {:?}, insert {:?}, amount {:?}",
-                    dir,
-                    ty,
-                    target,
-                    insert,
-                    amount
-                );
                 Action::Value(ValueSlot::Const(
                     Const::new(ConstKind::Int(execute_shift_int(
                         dir,
@@ -593,13 +601,6 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
             _ => panic!("unsupported instruction {:#?}", inst),
         };
 
-        trace!(
-            "[{}] i{}: {} # {:?}",
-            self.state.time(),
-            llhd::ValueId::from(inst.as_ref().into()),
-            action,
-            inst.kind()
-        );
         action
     }
 
