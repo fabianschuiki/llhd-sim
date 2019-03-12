@@ -229,6 +229,20 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
         values: &HashMap<ValueId, ValueSlot>,
         signals: &[Signal],
     ) -> Action {
+        match std::panic::catch_unwind(|| self.execute_instruction_inner(inst, values, signals)) {
+            Ok(x) => x,
+            Err(_) => panic!("panic while executing {:#?}", inst),
+        }
+    }
+
+    /// Execute a single instruction. Returns an action to be taken in response
+    /// to the instruction.
+    fn execute_instruction_inner(
+        &self,
+        inst: &Inst,
+        values: &HashMap<ValueId, ValueSlot>,
+        signals: &[Signal],
+    ) -> Action {
         // Resolves a value ref to a constant time value.
         let resolve_delay = |vr: &ValueRef| -> ConstTime {
             match *vr {
