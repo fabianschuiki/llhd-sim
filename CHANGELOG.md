@@ -5,7 +5,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## Unreleased
 ### Added
-- Add support for `var`, `load`, and `store` instructions.
+- Add support for `var`, `load`, `store`, `shl`, and `shr` instructions.
 - Add `--sequential` option to disable parallelization.
 
 ### Changed

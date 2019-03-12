@@ -427,6 +427,60 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                     .into(),
                 ))
             }
+            ShiftInst(dir, ref ty, ref target, ref insert, ref amount) if ty.is_array() => {
+                let amount = resolve_value(amount);
+                let amount = amount.unwrap_const().unwrap_int().value();
+                let width = ty.unwrap_array().0;
+                let amount = if amount > &BigInt::from(width) {
+                    width
+                } else {
+                    amount.to_usize().unwrap()
+                };
+                // trace!("amount = {}", amount);
+                // trace!("width = {}", width);
+                let (upper_cut, lower_cut) = match dir {
+                    ShiftDir::Left => (amount, 0),
+                    ShiftDir::Right => (0, amount),
+                };
+                match **resolve_value(target).unwrap_aggregate() {
+                    AggregateKind::Array(ref a) => {
+                        use std::iter::repeat;
+                        let insert = resolve_value(insert);
+                        let elements = a.elements();
+                        let new_elements = repeat(insert.clone())
+                            .take(lower_cut)
+                            .chain(
+                                elements[lower_cut..elements.len() - upper_cut]
+                                    .iter()
+                                    .cloned(),
+                            )
+                            .chain(repeat(insert.clone()).take(upper_cut))
+                            .collect();
+                        Action::Value(ValueSlot::Const(const_array(ty.clone(), new_elements)))
+                    }
+                    ref a => panic!("target of array extract is not an array; got {:?}", a),
+                }
+            }
+            ShiftInst(dir, ref ty, ref target, ref insert, ref amount) if ty.is_pointer() => {
+                Action::Value(ValueSlot::VariablePointer(execute_shift_pointer(
+                    inst,
+                    dir,
+                    ty,
+                    resolve_variable_pointer(target),
+                    amount,
+                    resolve_value,
+                )))
+            }
+            ShiftInst(dir, ref ty, ref target, ref insert, ref amount) if ty.is_signal() => {
+                Action::Value(ValueSlot::SignalPointer(execute_shift_pointer(
+                    inst,
+                    dir,
+                    ty,
+                    resolve_signal_pointer(target),
+                    amount,
+                    resolve_value,
+                )))
+            }
 
             // Signal and instance instructions are simply ignored, as they are
             // handled by the builder and only occur in entities.
@@ -638,6 +692,46 @@ fn execute_shift_int(
         }
     };
     ConstInt::new(target.width(), shifted)
+}
+
+/// Execute a shift instruction on a pointer target.
+fn execute_shift_pointer<T>(
+    inst: &Inst,
+    dir: ShiftDir,
+    ty: &Type,
+    mut ptr: ValuePointer<T>,
+    amount: &ValueRef,
+    resolve_value: impl FnOnce(&ValueRef) -> ValueRef,
+) -> ValuePointer<T> {
+    let amount = resolve_value(amount)
+        .unwrap_const()
+        .unwrap_int()
+        .value()
+        .to_usize()
+        .unwrap();
+    let width = match **ty {
+        PointerType(ref ty) | SignalType(ref ty) => match **ty {
+            IntType(w) => w,
+            ArrayType(w, _) => w,
+            _ => panic!(
+                "type {} incompatible with shl/shr operation; {:#?}",
+                ty, inst
+            ),
+        },
+        _ => unreachable!(),
+    };
+    let amount = std::cmp::min(amount, width);
+    match dir {
+        ShiftDir::Left => {
+            ptr.discard.1 += amount;
+            ptr.select.push(ValueSelect::Slice(0, width - amount));
+        }
+        ShiftDir::Right => {
+            ptr.discard.0 += amount;
+            ptr.select.push(ValueSelect::Slice(amount, width - amount));
+        }
+    }
+    ptr
 }
 
 fn value_type(v: &ValueRef) -> Type {
