@@ -3,16 +3,20 @@
 #![allow(dead_code, unused_variables)]
 //! The execution engine that advances the simulation step by step.
 
-use crate::state::{
-    Event, Instance, InstanceKind, InstanceRef, InstanceState, Signal, SignalRef, State,
-    TimedInstance, ValueSlot,
+use crate::{
+    state::{
+        Event, Instance, InstanceKind, InstanceRef, InstanceState, Signal, SignalRef, State,
+        TimedInstance, ValuePointer, ValueSelect, ValueSlot,
+    },
+    tracer::Tracer,
 };
-use crate::tracer::Tracer;
 use llhd::*;
-use num::{BigInt, BigUint, ToPrimitive};
+use num::{BigInt, BigUint, One, ToPrimitive};
 use rayon::prelude::*;
-use std::borrow::BorrowMut;
-use std::collections::{HashMap, HashSet};
+use std::{
+    borrow::BorrowMut,
+    collections::{HashMap, HashSet},
+};
 
 pub struct Engine<'ts, 'tm: 'ts> {
     step: usize,
@@ -46,8 +50,11 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
         let events = self.state.take_next_events();
         let mut changed_signals = HashSet::new();
         for Event { signal, value, .. } in events {
-            if self.state.signal_mut(signal).set_value(value) {
-                changed_signals.insert(signal);
+            let current = self.state.signal(signal.target).value();
+            let modified = modify_pointed_value(&signal, current, value);
+            let s = stringify_value(&modified);
+            if self.state.signal_mut(signal.target).set_value(modified) {
+                changed_signals.insert(signal.target);
             }
         }
 
@@ -157,7 +164,14 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                         match action {
                             Action::None => (),
                             Action::Value(vs) => instance.set_value(inst.as_ref().into(), vs),
-                            Action::Store(ptr, vs) => instance.set_value(ptr, vs),
+                            Action::Store(ptr, v) => {
+                                let current = match instance.value(ptr.target) {
+                                    ValueSlot::Variable(k) => k,
+                                    x => panic!("variable targeted by store action has value {:?} instead of Variable(...)", x),
+                                };
+                                let new = modify_pointed_value(&ptr, current, v);
+                                instance.set_value(ptr.target, ValueSlot::Variable(new));
+                            }
                             Action::Event(e) => events.push(e),
                             Action::Jump(blk) => {
                                 let blk = prok.body().block(blk);
@@ -194,7 +208,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                     match action {
                         Action::None => (),
                         Action::Value(vs) => instance.set_value(inst.as_ref().into(), vs),
-                        Action::Store(ptr, vs) => instance.set_value(ptr, vs),
+                        Action::Store(ptr, vs) => panic!("cannot store in entity"),
                         Action::Event(e) => events.push(e),
                         Action::Jump(..) => panic!("cannot jump in entity"),
                         Action::Suspend(..) => panic!("cannot suspend entity"),
@@ -230,7 +244,10 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
         let resolve_signal = |vr: &ValueRef| -> SignalRef {
             match values[&vr.id().unwrap()] {
                 ValueSlot::Signal(r) => r,
-                ref x => panic!("expected value to resolve to a signal, got {:?}", x),
+                ref x => panic!(
+                    "expected value {:?} to resolve to a signal, got {:?}",
+                    vr, x
+                ),
             }
         };
 
@@ -250,6 +267,39 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
             }
         };
 
+        // Resolves a value ref to a variable pointer.
+        let resolve_variable_pointer = |vr: &ValueRef| -> ValuePointer<ValueId> {
+            let id = vr.id().unwrap();
+            match values[&id] {
+                ValueSlot::Variable(_) => ValuePointer {
+                    target: id,
+                    select: vec![],
+                    discard: (0, 0),
+                },
+                ValueSlot::VariablePointer(ref ptr) => ptr.clone(),
+                ref x => panic!(
+                    "expected value {:?} to resolve to a variable pointer, got {:?}",
+                    vr, x
+                ),
+            }
+        };
+
+        // Resolves a value ref to a signal pointer.
+        let resolve_signal_pointer = |vr: &ValueRef| -> ValuePointer<SignalRef> {
+            match values[&vr.id().unwrap()] {
+                ValueSlot::Signal(sig) => ValuePointer {
+                    target: sig,
+                    select: vec![],
+                    discard: (0, 0),
+                },
+                ValueSlot::SignalPointer(ref ptr) => ptr.clone(),
+                ref x => panic!(
+                    "expected value {:?} to resolve to a signal pointer, got {:?}",
+                    vr, x
+                ),
+            }
+        };
+
         let action = match *inst.kind() {
             // For the drive instruction we assemble a new event for the queue.
             // The absolute time of the event is calculated either from the
@@ -261,7 +311,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                     .as_ref()
                     .map(|delay| self.time_after_delay(&resolve_delay(delay)))
                     .unwrap_or_else(|| self.time_after_delta()),
-                signal: resolve_signal(signal),
+                signal: resolve_signal_pointer(signal),
                 value: resolve_value(value),
             }),
 
@@ -330,12 +380,19 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                     .into(),
                 ))
             }
-            VariableInst(ref ty) => Action::Value(ValueSlot::Const(const_zero(ty))),
+            VariableInst(ref ty) => Action::Value(ValueSlot::Variable(const_zero(ty))),
             LoadInst(ref ty, ref ptr) => {
-                Action::Value(ValueSlot::Const(resolve_value(ptr)))
+                let ptr = resolve_variable_pointer(ptr);
+                if !ptr.select.is_empty() {
+                    warn!("select {:?} ignored for load {:?}", ptr.select, inst);
+                }
+                Action::Value(match values[&ptr.target] {
+                    ValueSlot::Variable(ref k) => ValueSlot::Const(k.clone()),
+                    _ => panic!("load target {:?} did not resolve to a variable value", ptr),
+                })
             }
             StoreInst(ref ty, ref ptr, ref value) => {
-                Action::Store(ptr.id().unwrap(), ValueSlot::Const(resolve_value(value)))
+                Action::Store(resolve_variable_pointer(ptr), resolve_value(value))
             }
             ShiftInst(dir, ref ty, ref target, ref insert, ref amount) if ty.is_int() => {
                 trace!(
@@ -415,7 +472,7 @@ enum Action {
     Value(ValueSlot),
     /// Change another value's entry in the value table. Used by instructions
     /// to simulate writing to memory.
-    Store(ValueId, ValueSlot),
+    Store(ValuePointer<ValueId>, ValueRef),
     /// Add an event to the event queue.
     Event(Event),
     /// Transfer control to a different block, executing that block's
@@ -431,7 +488,7 @@ impl std::fmt::Display for Action {
         match *self {
             Action::None => write!(f, "<no action>"),
             Action::Value(ref v) => write!(f, "= {:?}", v),
-            Action::Store(id, ref v) => write!(f, "*i{} = {:?}", id, v),
+            Action::Store(ref ptr, ref v) => write!(f, "*i{} = {:?}", ptr.target, v),
             Action::Event(ref ev) => write!(f, "@{} {:?} <= {:?}", ev.time, ev.signal, ev.value),
             Action::Jump(..) | Action::Suspend(..) => write!(f, "{:?}", self),
         }
@@ -567,4 +624,137 @@ fn execute_shift_int(
         }
     };
     ConstInt::new(target.width(), shifted)
+}
+
+fn value_type(v: &ValueRef) -> Type {
+    match v {
+        ValueRef::Const(k) => k.ty(),
+        ValueRef::Aggregate(k) => k.ty(),
+        _ => panic!("cannot determine type of {:?}", v),
+    }
+}
+
+/// Modify a value according to a pointer.
+fn modify_pointed_value<T>(ptr: &ValuePointer<T>, current: &ValueRef, new: ValueRef) -> ValueRef {
+    let new = if ptr.discard != (0, 0) {
+        let (left, right) = ptr.discard;
+        // trace!("discard ({}, {}) of {:?}", left, right, new);
+        match new {
+            ValueRef::Const(k) => match *k {
+                ConstKind::Int(ref ki) => {
+                    let v = ki.value() % (BigInt::one() << (ki.width() - left));
+                    let v = v >> right;
+                    // trace!("{} => {}", ki.value(), v);
+                    const_int(ki.width() - left - right, v).into()
+                }
+                _ => panic!("cannot discard {:?} on constant {:?}", ptr.discard, k),
+            },
+            // ValueRef::Aggregate(a) => new.clone(),
+            _ => panic!("cannot discard {:?} on value {:?}", ptr.discard, new),
+        }
+    } else {
+        new
+    };
+    modify_selected_value(&ptr.select, current, new)
+}
+
+/// Modify a value according to a sequence of selection operations.
+fn modify_selected_value(select: &[ValueSelect], current: &ValueRef, new: ValueRef) -> ValueRef {
+    if select.is_empty() {
+        // assert_eq!(value_type(current), value_type(&new));
+        return new;
+    }
+    match select[0] {
+        ValueSelect::Element(index) => {
+            // trace!("element {} of {:?}", index, current);
+            match current {
+                ValueRef::Const(k) => match **k {
+                    ConstKind::Int(ref ki) => {
+                        let current_bit: BigInt = (ki.value() >> index) % 2;
+                        let modified_bit = {
+                            modify_selected_value(
+                                &select[1..],
+                                &const_int(1, current_bit.clone()).into(),
+                                new,
+                            )
+                            .unwrap_const()
+                            .unwrap_int()
+                            .value()
+                                % 2
+                        };
+                        let modified =
+                            ki.value() - (current_bit << index) + (modified_bit << index);
+                        // trace!("{} => {}", ki.value(), modified);
+                        const_int(ki.width(), modified).into()
+                    }
+                    _ => panic!("cannot select {:?} on constant {:?}", select[0], k),
+                },
+                ValueRef::Aggregate(a) => match **a {
+                    AggregateKind::Struct(ref a) => {
+                        let mut fields = a.fields().to_vec();
+                        fields[index] =
+                            modify_selected_value(&select[1..], &a.fields()[index], new);
+                        const_struct(fields).into()
+                    }
+                    AggregateKind::Array(ref a) => {
+                        let mut elements = a.elements().to_vec();
+                        elements[index] =
+                            modify_selected_value(&select[1..], &elements[index], new);
+                        const_array(a.ty().clone(), elements)
+                    }
+                },
+                _ => panic!("cannot select {:?} on value {:?}", select[0], current),
+            }
+        }
+        ValueSelect::Slice(offset, length) => {
+            // trace!("slice ({}, {}) of {:?}", offset, length, current);
+            match current {
+                ValueRef::Const(k) => match **k {
+                    ConstKind::Int(ref ki) => {
+                        let kui = &ki.value().to_biguint().unwrap();
+                        let mod_len = BigUint::one() << length;
+                        let mod_off = BigUint::one() << offset;
+                        let lower = kui % mod_off;
+                        let upper = (kui >> (length + offset)) << (length + offset);
+                        let vc = (kui >> offset) % mod_len;
+                        let vn = modify_selected_value(
+                            &select[1..],
+                            &const_int(length, vc.into()).into(),
+                            new,
+                        )
+                        .unwrap_const()
+                        .unwrap_int()
+                        .value()
+                        .to_biguint()
+                        .unwrap();
+                        let v = upper | (vn << offset) | lower;
+                        // trace!("{} => {}", kui, v);
+                        const_int(ki.width(), v.into()).into()
+                    }
+                    _ => panic!("cannot select {:?} on constant {:?}", select[0], k),
+                },
+                ValueRef::Aggregate(a) => match **a {
+                    AggregateKind::Array(ref a) => {
+                        let mut elements = a.elements().to_vec();
+                        let modified = modify_selected_value(
+                            &select[1..],
+                            &const_array(
+                                array_ty(length, a.ty().unwrap_array().1.clone()),
+                                elements[offset..offset + length].to_vec(),
+                            ),
+                            new,
+                        );
+                        let modified = match **modified.unwrap_aggregate() {
+                            AggregateKind::Array(ref a) => a.elements(),
+                            _ => panic!("modified selected value {:?} is not an array", modified),
+                        };
+                        elements[offset..offset + length].clone_from_slice(modified);
+                        const_array(a.ty().clone(), elements)
+                    }
+                    _ => panic!("cannot select {:?} on aggregate {:?}", select[0], a),
+                },
+                _ => panic!("cannot select {:?} on value {:?}", select[0], current),
+            }
+        }
+    }
 }

@@ -4,9 +4,11 @@
 
 use llhd::{Block, ConstTime, Entity, Module, ModuleContext, Process, Type, ValueId, ValueRef};
 use num::zero;
-use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap};
-use std::sync::Mutex;
+use std::{
+    cmp::Ordering,
+    collections::{BinaryHeap, HashMap},
+    sync::Mutex,
+};
 
 pub struct State<'tm> {
     module: &'tm Module,
@@ -288,12 +290,55 @@ impl<'tm> Instance<'tm> {
     pub fn outputs(&self) -> &[SignalRef] {
         &self.outputs
     }
+
+    /// Get the name of the entity or process.
+    pub fn name(&self) -> &str {
+        match self.kind {
+            InstanceKind::Process { prok, .. } => prok.name(),
+            InstanceKind::Entity { entity, .. } => entity.name(),
+        }
+    }
 }
 
-#[derive(Debug)]
+/// A slot that carries a single value.
+///
+/// Slots are assigned to each entity in the LLHD graph that may carry a value.
+/// Execution of instructions change the value slots.
+#[derive(Debug, Clone)]
 pub enum ValueSlot {
+    /// A signal.
     Signal(SignalRef),
+    /// A variable with its current value.
+    Variable(ValueRef),
+    /// A constant value.
     Const(ValueRef),
+    /// A pointer to a variable.
+    VariablePointer(ValuePointer<ValueId>),
+    /// A pointer to a signal.
+    SignalPointer(ValuePointer<SignalRef>),
+}
+
+/// A pointer to a value.
+///
+/// A `ValuePointer` represents a variable or signal that is either referenced
+/// in its entirety, or by selecting a subset of its elements, bits, or fields.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ValuePointer<T> {
+    /// The targeted variable or signal.
+    pub target: T,
+    /// The associated selection into the target.
+    pub select: Vec<ValueSelect>,
+    /// The discarded portions to the left and right of the assigned value.
+    pub discard: (usize, usize),
+}
+
+/// A selection of a part of a value.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ValueSelect {
+    /// An individual array element, struct field, or integer bit.
+    Element(usize),
+    /// A slice of array elements or integer bits, given by `(offset, length)`.
+    Slice(usize, usize),
 }
 
 pub enum InstanceKind<'tm> {
@@ -329,7 +374,7 @@ impl InstanceRef {
 #[derive(Debug, Eq, PartialEq)]
 pub struct Event {
     pub time: ConstTime,
-    pub signal: SignalRef,
+    pub signal: ValuePointer<SignalRef>,
     pub value: ValueRef,
 }
 
