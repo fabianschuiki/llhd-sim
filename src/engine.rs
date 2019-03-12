@@ -481,6 +481,61 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                     resolve_value,
                 )))
             }
+            ExtractInst(ref ty, ref target, SliceMode::Element(index)) if ty.is_int() => {
+                let v = resolve_value(target);
+                let v = v.unwrap_const().unwrap_int().value();
+                let v = (v >> index) % 2;
+                Action::Value(ValueSlot::Const(const_int(1, v).into()))
+            }
+            ExtractInst(ref ty, ref target, SliceMode::Slice(offset, length)) if ty.is_int() => {
+                let v = resolve_value(target);
+                let v = v.unwrap_const().unwrap_int().value();
+                let v = (v >> offset) % (BigInt::one() << length);
+                Action::Value(ValueSlot::Const(const_int(length, v).into()))
+            }
+            ExtractInst(ref ty, ref target, SliceMode::Element(index)) if ty.is_struct() => {
+                Action::Value(ValueSlot::Const(
+                    match **resolve_value(target).unwrap_aggregate() {
+                        AggregateKind::Struct(ref sa) => sa.fields()[index].clone(),
+                        ref a => panic!("target of struct extract is not a struct; got {:?}", a),
+                    },
+                ))
+            }
+            ExtractInst(ref ty, ref target, mode) if ty.is_array() => {
+                let v = resolve_value(target);
+                let elems = match **v.unwrap_aggregate() {
+                    AggregateKind::Array(ref a) => a.elements(),
+                    ref a => panic!("target of array extract is not an array; got {:?}", a),
+                };
+                Action::Value(ValueSlot::Const(match mode {
+                    SliceMode::Element(i) => elems[i].clone(),
+                    SliceMode::Slice(o, l) => const_array(
+                        array_ty(l, ty.unwrap_array().1.clone()),
+                        elems[o..o + l].to_vec(),
+                    ),
+                }))
+            }
+            ExtractInst(ref ty, ref target, mode) if ty.is_pointer() || ty.is_signal() => {
+                let adjust = |select: &mut Vec<_>| match mode {
+                    SliceMode::Element(i) => select.push(ValueSelect::Element(i)),
+                    SliceMode::Slice(o, l) => select.push(ValueSelect::Slice(o, l)),
+                };
+                Action::Value(match **ty {
+                    PointerType(..) => {
+                        let mut ptr = resolve_variable_pointer(target);
+                        ptr.discard = (0, 0);
+                        adjust(&mut ptr.select);
+                        ValueSlot::VariablePointer(ptr)
+                    }
+                    SignalType(..) => {
+                        let mut ptr = resolve_signal_pointer(target);
+                        ptr.discard = (0, 0);
+                        adjust(&mut ptr.select);
+                        ValueSlot::SignalPointer(ptr)
+                    }
+                    _ => unreachable!(),
+                })
+            }
 
             // Signal and instance instructions are simply ignored, as they are
             // handled by the builder and only occur in entities.
