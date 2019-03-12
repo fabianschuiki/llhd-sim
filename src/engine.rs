@@ -758,3 +758,41 @@ fn modify_selected_value(select: &[ValueSelect], current: &ValueRef, new: ValueR
         }
     }
 }
+
+fn stringify_value(value: &ValueRef) -> String {
+    match *value {
+        ValueRef::Const(ref k) => match **k {
+            ConstKind::Int(ref v) => format!("{}", v.value()),
+            ConstKind::Time(ref t) => format!("{}", t),
+        },
+        ValueRef::Aggregate(ref a) => match **a {
+            AggregateKind::Struct(ref a) => {
+                let mut s = String::from("{");
+                let mut first = true;
+                for f in a.fields() {
+                    if !first {
+                        s.push_str(", ");
+                    }
+                    s.push_str(&stringify_value(f));
+                    first = false;
+                }
+                s.push('}');
+                s
+            }
+            AggregateKind::Array(ref a) => {
+                let mut s = String::from("[");
+                let mut first = true;
+                for e in a.elements() {
+                    if !first {
+                        s.push_str(", ");
+                    }
+                    s.push_str(&stringify_value(e));
+                    first = false;
+                }
+                s.push(']');
+                s
+            }
+        },
+        _ => format!("{:?}", value),
+    }
+}
