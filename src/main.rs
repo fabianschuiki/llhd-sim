@@ -63,8 +63,6 @@ fn main() {
         }
     };
 
-    // Dump the input file back to the console. Just for reference.
-    llhd::assembly::write(&mut std::io::stdout().lock(), &module);
 
     // Build the simulation state for this module.
     let mut state = builder::build(&module);
