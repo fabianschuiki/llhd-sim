@@ -1,0 +1,12 @@
+proc @foo () (i1$ %x0, i3$ %x1, i16$ %x2, i16$ %x3) {
+%entry:
+	%v0 = extract element i16 84, 2
+	%v1 = extract slice i16 84, 4, 3
+	%v2 = insert element i16 0, 2, i1 1
+	%v3 = insert slice i16 0, 4, 3, i3 5
+	drv %x0 %v0
+	drv %x1 %v1
+	drv %x2 %v2
+	drv %x3 %v3
+	halt
+}

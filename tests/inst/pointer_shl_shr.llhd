@@ -1,0 +1,36 @@
+proc @foo () (i3$ %out) {
+%entry:
+	%x = var i3
+	%dummy = var i1
+
+	%xr0 = shr i3* %x, i1* %dummy, i32 0
+	%xr1 = shr i3* %x, i1* %dummy, i32 1
+	%xl0 = shl i3* %x, i1* %dummy, i32 0
+	%xl1 = shl i3* %x, i1* %dummy, i32 1
+
+	store i3* %x i3 0
+
+	store i3* %xr0 i3 7    ; x=7
+	%0 = load i3* %x
+	drv %out %0 1ns
+	store i3* %x i3 0      ; x=0
+	%1 = load i3* %x
+	drv %out %1 2ns
+	store i3* %xr1 i3 7    ; x=6
+	%2 = load i3* %x
+	drv %out %2 3ns
+
+	store i3* %x i3 0      ; x=0
+
+	store i3* %xl0 i3 7    ; x=7
+	%3 = load i3* %x
+	drv %out %3 4ns
+	store i3* %x i3 0      ; x=0
+	%4 = load i3* %x
+	drv %out %4 5ns
+	store i3* %xl1 i3 7    ; x=3
+	%5 = load i3* %x
+	drv %out %5 6ns
+
+	halt
+}

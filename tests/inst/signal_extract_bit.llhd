@@ -1,0 +1,8 @@
+proc @foo () (i16$ %x) {
+%entry:
+	%x0 = extract element i16$ %x, 2
+	%x1 = extract slice i16$ %x, 4, 3
+	drv %x0 1
+	drv %x1 5
+	halt
+}

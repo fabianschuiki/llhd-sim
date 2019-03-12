@@ -1,0 +1,12 @@
+proc @foo () (i16$ %x0, i32$ %x1, {i16, i32}$ %x2, {i16, i32}$ %x3) {
+%entry:
+	%v0 = extract element {i16, i32} {i16 42, i32 9001}, 0
+	%v1 = extract element {i16, i32} {i16 42, i32 9001}, 1
+	%v2 = insert element {i16, i32} {i16 0, i32 0}, 0, i16 42
+	%v3 = insert element {i16, i32} {i16 0, i32 0}, 1, i32 9001
+	drv %x0 %v0
+	drv %x1 %v1
+	drv %x2 %v2
+	drv %x3 %v3
+	halt
+}

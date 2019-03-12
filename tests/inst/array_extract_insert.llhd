@@ -1,0 +1,24 @@
+proc @foo () (i16$ %x0, [3 x i16]$ %x1, [2 x i16]$ %x2) {
+%entry:
+    %v0 = extract element [3 x i16] [i16 42, 9001, 1337], 0
+    %v1 = extract element [3 x i16] [i16 42, 9001, 1337], 1
+    %v2 = extract element [3 x i16] [i16 42, 9001, 1337], 2
+    %v3 = extract slice [3 x i16] [i16 42, 9001, 1337], 0, 2
+    %v4 = extract slice [3 x i16] [i16 42, 9001, 1337], 1, 2
+    %v5 = insert element [3 x i16] [i16 0, 0, 0], 0, i16 42
+    %v6 = insert element [3 x i16] [i16 0, 0, 0], 1, i16 9001
+    %v7 = insert element [3 x i16] [i16 0, 0, 0], 2, i16 1337
+    %v8 = insert slice [3 x i16] [i16 0, 0, 0], 0, 2, [i16 42, 9001]
+    %v9 = insert slice [3 x i16] [i16 0, 0, 0], 1, 2, [i16 9001, 1337]
+    drv %x0 %v0 1ns
+    drv %x0 %v1 2ns
+    drv %x0 %v2 3ns
+    drv %x2 %v3 4ns
+    drv %x2 %v4 5ns
+    drv %x1 %v5 6ns
+    drv %x1 %v6 7ns
+    drv %x1 %v7 8ns
+    drv %x1 %v8 9ns
+    drv %x1 %v9 10ns
+	halt
+}
