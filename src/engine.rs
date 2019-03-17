@@ -230,8 +230,10 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                         Action::Suspend(..) => panic!("cannot suspend entity"),
                     }
                 }
-                let inputs = instance.inputs().iter().cloned().collect();
-                instance.set_state(InstanceState::Wait(None, inputs));
+                let inputs = instance.inputs().iter().cloned();
+                let outputs = instance.outputs().iter().cloned();
+                let sensitivity = inputs.chain(outputs).collect();
+                instance.set_state(InstanceState::Wait(None, sensitivity));
                 events
             }
         }

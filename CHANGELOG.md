@@ -5,6 +5,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## Unreleased
 
+### Fixed
+- Make entities sensitive to output signals. ([#4](https://github.com/fabianschuiki/llhd-sim/issues/4))
+
 ## 0.3.0 - 2019-03-12
 ### Added
 - Add support for `var`, `load`, `store`, `extract`, `insert`, `shl`, and `shr` instructions.
