@@ -1,16 +1,20 @@
 // Copyright (c) 2017 Fabian Schuiki
 
-#![allow(dead_code, unused_variables)]
+//! Simulation execution engine
+//!
 //! The execution engine that advances the simulation step by step.
+
+#![allow(dead_code, unused_variables, unused_imports)]
 
 use crate::{
     state::{
         Event, Instance, InstanceKind, InstanceRef, InstanceState, Signal, SignalRef, State,
-        TimedInstance, ValuePointer, ValueSelect, ValueSlot,
+        TimedInstance, ValuePointer, ValueSelect, ValueSlice, ValueSlot, ValueTarget,
     },
     tracer::Tracer,
+    value::{ArrayValue, IntValue, StructValue, TimeValue, Value},
 };
-use llhd::*;
+use llhd::ir::{Opcode, Unit};
 use num::{BigInt, BigUint, One, ToPrimitive};
 use rayon::prelude::*;
 use std::{
@@ -35,28 +39,40 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
     }
 
     /// Run the simulation to completion.
-    pub fn run(&mut self, tracer: &mut Tracer) {
+    pub fn run(&mut self, tracer: &mut dyn Tracer) {
         while self.step(tracer) {}
     }
 
     /// Perform one simulation step. Returns true if there are remaining events
     /// in the queue, false otherwise. This can be used as an indication as to
     /// when the simulation is finished.
-    pub fn step(&mut self, tracer: &mut Tracer) -> bool {
-        println!("STEP {}: {}", self.step, self.state.time());
+    pub fn step(&mut self, tracer: &mut dyn Tracer) -> bool {
+        println!("STEP {}: {}", self.step, self.state.time);
         self.step += 1;
 
         // Apply events at this time, note changed signals.
         let events = self.state.take_next_events();
         let mut changed_signals = HashSet::new();
         for Event { signal, value, .. } in events {
-            let current = self.state.signal(signal.target).value();
-            let modified = modify_pointed_value(&signal, current, value);
-            let s = stringify_value(&modified);
-            if self.state.signal_mut(signal.target).set_value(modified) {
-                changed_signals.insert(signal.target);
-                for p in &self.state.probes()[&signal.target] {
-                    trace!("[{}] {} = {}", self.state.time(), p, s);
+            // Determine the current state of all targeted signals.
+            let signals = signal.slices.iter().map(|s| s.target.unwrap_signal());
+            let mut modified: Vec<_> = signals
+                .clone()
+                .map(|sig| self.state[sig].value().clone())
+                .collect();
+
+            // Modify the signals.
+            let old = modified.clone();
+            write_pointer(&signal, &mut modified, &value);
+
+            // Store the modified state back.
+            for ((sig, modified), old) in signals.zip(modified.into_iter()).zip(old.into_iter()) {
+                if self.state[sig].set_value(modified.clone()) {
+                    changed_signals.insert(sig);
+                    debug!(
+                        "changed: {:?} {} -> {}",
+                        self.state.probes[&sig][0], old, modified
+                    );
                 }
             }
         }
@@ -65,28 +81,25 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
         let timed = self.state.take_next_timed();
         for TimedInstance { inst, .. } in timed {
             // println!("timed wake up of {:?}", inst);
-            trace!(
-                "[{}] wakeup {}",
-                self.state.time(),
-                self.state.instance(inst).lock().unwrap().name(),
+            debug!(
+                "[{}] wakeup (time) {}",
+                self.state.time,
+                self.state[inst].lock().unwrap().name(),
             );
-            self.state
-                .instance(inst)
-                .lock()
-                .unwrap()
-                .set_state(InstanceState::Ready);
+            self.state[inst].lock().unwrap().state = InstanceState::Ready;
         }
 
         // Wake up units that were sensitive to one of the changed signals.
-        for inst in self.state.instances_mut() {
+        for inst in &mut self.state.insts {
             let mut inst = inst.lock().unwrap();
-            let trigger = if let InstanceState::Wait(_, ref signals) = *inst.state() {
+            let trigger = if let InstanceState::Wait(_, ref signals) = inst.state {
                 signals.iter().any(|s| changed_signals.contains(s))
             } else {
                 false
             };
             if trigger {
-                inst.set_state(InstanceState::Ready);
+                debug!("[{}] wakeup (sense) {}", self.state.time, inst.name(),);
+                inst.state = InstanceState::Ready;
             }
         }
 
@@ -96,10 +109,10 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
         // Execute the instances that are ready.
         let ready_insts: Vec<_> = self
             .state
-            .instances()
+            .insts
             .iter()
             .enumerate()
-            .filter(|&(_, u)| u.lock().unwrap().state() == &InstanceState::Ready)
+            .filter(|&(_, u)| u.lock().unwrap().state == InstanceState::Ready)
             .map(|(i, _)| i)
             .collect();
         // println!("ready_insts: {:?}", ready_insts);
@@ -107,7 +120,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
             ready_insts
                 .par_iter()
                 .map(|&index| {
-                    let mut lk = self.state.instances()[index].lock().unwrap();
+                    let mut lk = self.state.insts[index].lock().unwrap();
                     self.step_instance(lk.borrow_mut())
                 })
                 .reduce(
@@ -120,17 +133,17 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
         } else {
             let mut events = Vec::new();
             for &index in &ready_insts {
-                let mut lk = self.state.instances()[index].lock().unwrap();
+                let mut lk = self.state.insts[index].lock().unwrap();
                 events.extend(self.step_instance(lk.borrow_mut()));
             }
             events
         };
-        for event in &events {
-            let s = stringify_value(&event.value);
-            for p in &self.state.probes()[&event.signal.target] {
-                trace!("[{}] {} = {} @[{}]", self.state.time(), p, s, event.time);
-            }
-        }
+        // for event in &events {
+        //     let s = stringify_value(&event.value);
+        //     for p in &self.state.probes()[&event.signal.target] {
+        //         trace!("[{}] {} = {} @[{}]", self.state.time, p, s, event.time);
+        //     }
+        // }
         self.state.schedule_events(events.into_iter());
 
         // Gather a list of instances that perform a timed wait and schedule
@@ -138,7 +151,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
         let timed: Vec<_> = ready_insts
             .iter()
             .filter_map(
-                |index| match *self.state.instances()[*index].lock().unwrap().state() {
+                |index| match self.state.insts[*index].lock().unwrap().state {
                     InstanceState::Wait(Some(ref time), _) => Some(TimedInstance {
                         time: time.clone(),
                         inst: InstanceRef::new(*index),
@@ -152,7 +165,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
         // Advance time to next event or process wake, or finish
         match self.state.next_time() {
             Some(t) => {
-                self.state.set_time(t);
+                self.state.time = t;
                 true
             }
             None => false,
@@ -162,477 +175,920 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
     /// Continue execution of one single process or entity instance, until it is
     /// suspended by an instruction.
     fn step_instance(&self, instance: &mut Instance) -> Vec<Event> {
-        match *instance.kind() {
-            InstanceKind::Process {
-                prok,
-                mut next_block,
-            } => {
-                trace!("[{}] step process {}", self.state.time(), prok.name());
-                let ctx = ProcessContext::new(self.state.context(), prok);
-                let mut events = Vec::new();
-                // println!("stepping process {}, block {:?}", prok.name(), next_block.map(|b| b.name()));
-                while let Some(block) = next_block {
-                    next_block = None;
-                    for inst in block.insts(&ctx) {
-                        let action =
-                            self.execute_instruction(inst, instance.values(), self.state.signals());
-                        match action {
-                            Action::None => (),
-                            Action::Value(vs) => instance.set_value(inst.as_ref().into(), vs),
-                            Action::Store(ptr, v) => {
-                                let current = match instance.value(ptr.target) {
-                                    ValueSlot::Variable(k) => k,
-                                    x => panic!("variable targeted by store action has value {:?} instead of Variable(...)", x),
-                                };
-                                let new = modify_pointed_value(&ptr, current, v);
-                                instance.set_value(ptr.target, ValueSlot::Variable(new));
-                            }
-                            Action::Event(e) => events.push(e),
-                            Action::Jump(blk) => {
-                                let blk = prok.body().block(blk);
-                                // println!("jump to block {:?}", blk.name());
-                                next_block = Some(blk);
-                                break;
-                            }
-                            Action::Suspend(blk, st) => {
-                                let blk = blk.map(|br| prok.body().block(br));
-                                instance.set_state(st);
-                                match *instance.kind_mut() {
-                                    InstanceKind::Process {
-                                        ref mut next_block, ..
-                                    } => *next_block = blk,
-                                    _ => unreachable!(),
-                                }
-                                return events;
-                            }
-                        }
-                    }
-                }
+        match instance.kind {
+            InstanceKind::Process { prok, next_block } => {
+                self.step_process(instance, prok, next_block)
+                // trace!("[{}] step process {}", self.state.time, prok.name());
+                // let ctx = ProcessContext::new(self.state.context(), prok);
+                // let mut events = Vec::new();
+                // // println!("stepping process {}, block {:?}", prok.name(), next_block.map(|b| b.name()));
+                // while let Some(block) = next_block {
+                //     next_block = None;
+                //     for inst in block.insts(&ctx) {
+                //         let action =
+                //             self.execute_instruction(inst, instance.values(), self.state.signals());
+                //         match action {
+                //             Action::None => (),
+                //             Action::Value(vs) => instance.set_value(inst.as_ref().into(), vs),
+                //             Action::Store(ptr, v) => {
+                //                 let current = match instance.value(ptr.target) {
+                //                     ValueSlot::Variable(k) => k,
+                //                     x => panic!("variable targeted by store action has value {:?} instead of Variable(...)", x),
+                //                 };
+                //                 let new = modify_pointed_value(&ptr, current, v);
+                //                 instance.set_value(ptr.target, ValueSlot::Variable(new));
+                //             }
+                //             Action::Event(e) => events.push(e),
+                //             Action::Jump(blk) => {
+                //                 let blk = prok.body().block(blk);
+                //                 // println!("jump to block {:?}", blk.name());
+                //                 next_block = Some(blk);
+                //                 break;
+                //             }
+                //             Action::Suspend(blk, st) => {
+                //                 let blk = blk.map(|br| prok.body().block(br));
+                //                 instance.set_state(st);
+                //                 match *instance.kind_mut() {
+                //                     InstanceKind::Process {
+                //                         ref mut next_block, ..
+                //                     } => *next_block = blk,
+                //                     _ => unreachable!(),
+                //                 }
+                //                 return events;
+                //             }
+                //         }
+                //     }
+                // }
 
-                // We should never arrive here, since every block ends with a
-                // terminator instruction that redirects control flow.
-                panic!("process starved of instructions");
+                // // We should never arrive here, since every block ends with a
+                // // terminator instruction that redirects control flow.
+                // panic!("process starved of instructions");
             }
-
             InstanceKind::Entity { entity } => {
-                trace!("[{}] step entity {}", self.state.time(), entity.name());
-                // let ctx = EntityContext::new(self.state.context(), entity);
-                let mut events = Vec::new();
-                for inst in entity.insts() {
-                    let action =
-                        self.execute_instruction(inst, instance.values(), self.state.signals());
-                    match action {
-                        Action::None => (),
-                        Action::Value(vs) => instance.set_value(inst.as_ref().into(), vs),
-                        Action::Store(ptr, vs) => panic!("cannot store in entity"),
-                        Action::Event(e) => events.push(e),
-                        Action::Jump(..) => panic!("cannot jump in entity"),
-                        Action::Suspend(..) => panic!("cannot suspend entity"),
-                    }
-                }
-                let inputs = instance.inputs().iter().cloned();
-                let outputs = instance.outputs().iter().cloned();
-                let sensitivity = inputs.chain(outputs).collect();
-                instance.set_state(InstanceState::Wait(None, sensitivity));
-                events
+                self.step_entity(instance, entity)
+                // trace!("[{}] step entity {}", self.state.time, entity.name());
+                // //         // let ctx = EntityContext::new(self.state.context(), entity);
+                // let mut events = Vec::new();
+                // for inst in entity.insts() {
+                //     let action =
+                //         self.execute_instruction(inst, instance.values(), self.state.signals());
+                //     match action {
+                //         Action::None => (),
+                //         Action::Value(vs) => instance.set_value(inst.as_ref().into(), vs),
+                //         Action::Store(ptr, vs) => panic!("cannot store in entity"),
+                //         Action::Event(e) => events.push(e),
+                //         Action::Jump(..) => panic!("cannot jump in entity"),
+                //         Action::Suspend(..) => panic!("cannot suspend entity"),
+                //     }
+                // }
+                // let inputs = instance.inputs().iter().cloned();
+                // let outputs = instance.outputs().iter().cloned();
+                // let sensitivity = inputs.chain(outputs).collect();
+                // instance.set_state(InstanceState::Wait(None, sensitivity));
+                // events
             }
         }
+        // vec![]
+    }
+
+    /// Continue execution of one single process until it is suspended by an
+    /// instruction.
+    fn step_process(
+        &self,
+        instance: &mut Instance,
+        unit: &impl llhd::ir::Unit,
+        block: Option<llhd::ir::Block>,
+    ) -> Vec<Event> {
+        trace!("[{}] step process {}", self.state.time, unit.name());
+        let mut events = Vec::new();
+        let mut next_block = block;
+        while let Some(block) = next_block {
+            next_block = None;
+            for inst in unit.func_layout().insts(block) {
+                let action =
+                    self.execute_instruction(inst, unit, &instance.values, &self.state.signals);
+                match action {
+                    Action::None => (),
+                    Action::Value(vs) => {
+                        let v = unit.dfg().inst_result(inst);
+                        trace!("{} = {:?}", v, vs);
+                        instance.set_value(v, vs)
+                    }
+                    Action::Store(ptr, value) => {
+                        // Determine the current state of all targeted variables.
+                        let vars = ptr.slices.iter().map(|s| s.target.unwrap_variable());
+                        let mut modified: Vec<_> = vars
+                            .clone()
+                            .map(|var| match instance.value(var) {
+                                ValueSlot::Variable(ref k) => k.clone(),
+                                x => panic!(
+                                    "variable targeted by store action has value \
+                                     {:?} instead of Variable(...)",
+                                    x
+                                ),
+                            })
+                            .collect();
+
+                        // Modify the variables.
+                        write_pointer(&ptr, &mut modified, &value);
+
+                        // Store the modified state back.
+                        for (var, modified) in vars.zip(modified.into_iter()) {
+                            debug!("{:?} <- {}", var, modified);
+                            instance.set_value(var, ValueSlot::Variable(modified));
+                        }
+
+                        // let var = ptr.target.unwrap_variable();
+                        // let current = match instance.value(var) {
+                        //     ValueSlot::Variable(ref k) => k,
+                        //     x => panic!(
+                        //         "variable targeted by store action has value \
+                        //          {:?} instead of Variable(...)",
+                        //         x
+                        //     ),
+                        // };
+                        // let new = modify_pointed_value(&ptr, current, v);
+                        // instance.set_value(var, ValueSlot::Variable(new));
+                    }
+                    Action::Event(e) => {
+                        // debug!("Enqueue {:?}", e);
+                        events.push(e)
+                    }
+                    Action::Jump(blk) => {
+                        next_block = Some(blk);
+                        break;
+                    }
+                    Action::Suspend(blk, st) => {
+                        debug!("Suspend {} {:?}", instance.name(), st);
+                        instance.state = st;
+                        match instance.kind {
+                            InstanceKind::Process {
+                                ref mut next_block, ..
+                            } => *next_block = blk,
+                            _ => unreachable!(),
+                        }
+                        return events;
+                    }
+                }
+            }
+        }
+
+        // We should never arrive here, since every block ends with a
+        // terminator instruction that redirects control flow.
+        panic!("process starved of instructions");
+    }
+
+    /// Continue execution of one single entity.
+    fn step_entity(&self, instance: &mut Instance, unit: &impl llhd::ir::Unit) -> Vec<Event> {
+        trace!("[{}] step entity {}", self.state.time, unit.name());
+        let mut events = Vec::new();
+        for inst in unit.inst_layout().insts() {
+            let action =
+                self.execute_instruction(inst, unit, &instance.values, &self.state.signals);
+            match action {
+                Action::None => (),
+                Action::Value(vs) => {
+                    let v = unit.dfg().inst_result(inst);
+                    trace!("{} = {:?}", v, vs);
+                    instance.set_value(v, vs)
+                }
+                Action::Store(ptr, vs) => panic!("cannot store in entity"),
+                Action::Event(e) => {
+                    // debug!("Enqueue {:?}", e);
+                    events.push(e)
+                }
+                Action::Jump(..) => panic!("cannot jump in entity"),
+                Action::Suspend(..) => panic!("cannot suspend entity"),
+            }
+        }
+        let inputs = instance.inputs.iter().cloned();
+        let outputs = instance.outputs.iter().cloned();
+        let sensitivity = inputs.chain(outputs).collect();
+        instance.state = InstanceState::Wait(None, sensitivity);
+        events
     }
 
     /// Execute a single instruction. Returns an action to be taken in response
     /// to the instruction.
     fn execute_instruction(
         &self,
-        inst: &Inst,
-        values: &HashMap<ValueId, ValueSlot>,
+        inst: llhd::ir::Inst,
+        unit: &impl llhd::ir::Unit,
+        values: &HashMap<llhd::ir::Value, ValueSlot>,
         signals: &[Signal],
     ) -> Action {
-        match std::panic::catch_unwind(|| self.execute_instruction_inner(inst, values, signals)) {
-            Ok(x) => x,
-            Err(_) => panic!("panic while executing {:#?}", inst),
+        InstContext {
+            unit,
+            dfg: unit.dfg(),
+            values,
+            signals,
+            time: &self.state.time,
         }
+        .exec(inst)
     }
+}
 
+struct InstContext<'a, U> {
+    unit: &'a U,
+    dfg: &'a llhd::ir::DataFlowGraph,
+    values: &'a HashMap<llhd::ir::Value, ValueSlot>,
+    signals: &'a [Signal],
+    time: &'a TimeValue,
+}
+
+impl<'a, U> InstContext<'a, U>
+where
+    U: llhd::ir::Unit,
+{
     /// Execute a single instruction. Returns an action to be taken in response
     /// to the instruction.
-    fn execute_instruction_inner(
-        &self,
-        inst: &Inst,
-        values: &HashMap<ValueId, ValueSlot>,
-        signals: &[Signal],
-    ) -> Action {
-        // Resolves a value ref to a constant time value.
-        let resolve_delay = |vr: &ValueRef| -> ConstTime {
-            match *vr {
-                ValueRef::Const(ref k) => match **k {
-                    ConstKind::Time(ref k) => k.clone(),
-                    _ => panic!("constant value is not a time {:?}", k),
-                },
-                _ => panic!("value does not resolve to a delay"),
+    fn exec(&self, inst: llhd::ir::Inst) -> Action {
+        use llhd::ir::Opcode;
+        let dfg = self.unit.dfg();
+        let data = &dfg[inst];
+        let ty = dfg.inst_type(inst);
+        match data.opcode() {
+            Opcode::Inst | Opcode::Sig => (),
+            _ => trace!("{}", inst.dump(dfg)),
+        }
+
+        match data.opcode() {
+            // Constants
+            Opcode::ConstInt => {
+                let v =
+                    IntValue::from_signed(ty.unwrap_int(), data.get_const_int().unwrap().clone());
+                Action::Value(ValueSlot::Const(v.into()))
             }
-        };
-
-        // Resolves a value ref to a signal ref.
-        let resolve_signal = |vr: &ValueRef| -> SignalRef {
-            match values[&vr.id().unwrap()] {
-                ValueSlot::Signal(r) => r,
-                ref x => panic!(
-                    "expected value {:?} to resolve to a signal, got {:?}",
-                    vr, x
-                ),
+            Opcode::ConstTime => {
+                let v = data.get_const_time().unwrap().clone();
+                Action::Value(ValueSlot::Const(v.into()))
             }
-        };
 
-        // Resolves a value ref to a constant value. This is the main function
-        // that allows the value of individual nodes in a process/entity to be
-        // determined for processing.
-        let resolve_value = |vr: &ValueRef| -> ValueRef {
-            match *vr {
-                ValueRef::Const(_) | ValueRef::Aggregate(_) => vr.clone(),
-                _ => match values[&vr.id().unwrap()] {
-                    ValueSlot::Const(ref k) => k.clone(),
-                    ref x => panic!(
-                        "expected value {:?} to resolve to a constant/aggregate, got {:?}",
-                        vr, x
-                    ),
-                },
+            // Aggregates
+            Opcode::ArrayUniform => {
+                let v = ArrayValue::new_uniform(data.imms()[0], self.resolve_value(data.args()[0]));
+                Action::Value(ValueSlot::Const(v.into()))
             }
-        };
-
-        // Resolves a value ref to a variable pointer.
-        let resolve_variable_pointer = |vr: &ValueRef| -> ValuePointer<ValueId> {
-            let id = vr.id().unwrap();
-            match values[&id] {
-                ValueSlot::Variable(_) => ValuePointer {
-                    target: id,
-                    select: vec![],
-                    discard: (0, 0),
-                },
-                ValueSlot::VariablePointer(ref ptr) => ptr.clone(),
-                ref x => panic!(
-                    "expected value {:?} to resolve to a variable pointer, got {:?}",
-                    vr, x
-                ),
+            Opcode::Array => {
+                let vs = data
+                    .args()
+                    .iter()
+                    .map(|&arg| self.resolve_value(arg))
+                    .collect();
+                let v = ArrayValue::new(vs);
+                Action::Value(ValueSlot::Const(v.into()))
             }
-        };
-
-        // Resolves a value ref to a signal pointer.
-        let resolve_signal_pointer = |vr: &ValueRef| -> ValuePointer<SignalRef> {
-            match values[&vr.id().unwrap()] {
-                ValueSlot::Signal(sig) => ValuePointer {
-                    target: sig,
-                    select: vec![],
-                    discard: (0, 0),
-                },
-                ValueSlot::SignalPointer(ref ptr) => ptr.clone(),
-                ref x => panic!(
-                    "expected value {:?} to resolve to a signal pointer, got {:?}",
-                    vr, x
-                ),
+            Opcode::Struct => {
+                let vs = data
+                    .args()
+                    .iter()
+                    .map(|&arg| self.resolve_value(arg))
+                    .collect();
+                let v = StructValue::new(vs);
+                Action::Value(ValueSlot::Const(v.into()))
             }
-        };
 
-        let action = match *inst.kind() {
-            // For the drive instruction we assemble a new event for the queue.
-            // The absolute time of the event is calculated either from the
-            // delay given by the instruction, or as a single delta step. The
-            // signal to be driven and the target value are resolved from the
-            // instance's signal and value table.
-            DriveInst(ref signal, ref value, ref delay) => Action::Event(Event {
-                time: delay
-                    .as_ref()
-                    .map(|delay| self.time_after_delay(&resolve_delay(delay)))
-                    .unwrap_or_else(|| self.time_after_delta()),
-                signal: resolve_signal_pointer(signal),
-                value: resolve_value(value),
-            }),
+            // Alias
+            Opcode::Alias => Action::Value(ValueSlot::Const(self.resolve_value(data.args()[0]))),
 
-            WaitInst(block, ref delay, ref sensitivity) => {
+            // Branches
+            Opcode::Br => Action::Jump(data.blocks()[0]),
+            Opcode::BrCond => {
+                let cond = self.resolve_value(data.args()[0]);
+                if cond.is_zero() {
+                    Action::Jump(data.blocks()[0])
+                } else {
+                    Action::Jump(data.blocks()[1])
+                }
+            }
+
+            // Waits
+            Opcode::Wait => {
+                let sigs = data
+                    .args()
+                    .iter()
+                    .map(|&s| self.resolve_signal(s))
+                    .collect();
+                Action::Suspend(Some(data.blocks()[0]), InstanceState::Wait(None, sigs))
+            }
+            Opcode::WaitTime => {
+                let delay = self.time_after_delay(&self.resolve_delay(data.args()[0]));
+                let sigs = data.args()[1..]
+                    .iter()
+                    .map(|&s| self.resolve_signal(s))
+                    .collect();
                 Action::Suspend(
-                    Some(block),
-                    InstanceState::Wait(
-                        // Calculate the absolute simulation time after which the
-                        // unit should wake up again, if any.
-                        delay
-                            .as_ref()
-                            .map(|d| self.time_after_delay(&resolve_delay(d))),
-                        // Gather a list of signals that will trigger a wake up.
-                        sensitivity.iter().map(|s| resolve_signal(s)).collect(),
-                    ),
+                    Some(data.blocks()[0]),
+                    InstanceState::Wait(Some(delay), sigs),
                 )
             }
 
-            // The probe instruction simply evaluates to the probed signal's
-            // current value.
-            ProbeInst(_, ref signal) => Action::Value(ValueSlot::Const(
-                signals[resolve_signal(signal).as_usize()].value().clone(),
-            )),
-
-            UnaryInst(op, ref ty, ref arg) if ty.is_int() => Action::Value(ValueSlot::Const(
-                Const::new(ConstKind::Int(execute_unary(
-                    op,
-                    resolve_value(arg).unwrap_const().unwrap_int(),
-                )))
-                .into(),
-            )),
-
-            BinaryInst(op, ref ty, ref lhs, ref rhs) if ty.is_int() => {
-                Action::Value(ValueSlot::Const(
-                    Const::new(ConstKind::Int(execute_binary(
-                        op,
-                        resolve_value(lhs).unwrap_const().unwrap_int(),
-                        resolve_value(rhs).unwrap_const().unwrap_int(),
-                    )))
-                    .into(),
-                ))
-            }
-
-            BranchInst(BranchKind::Uncond(block)) => Action::Jump(block),
-            BranchInst(BranchKind::Cond(ref cond, if_true, if_false)) => {
-                let v = resolve_value(cond);
-                if v.unwrap_const() == &llhd::const_int(1, 1.into()) {
-                    Action::Jump(if_true)
-                } else {
-                    Action::Jump(if_false)
-                }
-            }
-            CompareInst(op, ref ty, ref lhs, ref rhs) if ty.is_int() => {
-                Action::Value(ValueSlot::Const(
-                    Const::new(ConstKind::Int(ConstInt::new(
-                        1,
-                        match execute_comparison(
-                            op,
-                            resolve_value(lhs).unwrap_const().unwrap_int(),
-                            resolve_value(rhs).unwrap_const().unwrap_int(),
-                        ) {
-                            false => 0.into(),
-                            true => 1.into(),
-                        },
-                    )))
-                    .into(),
-                ))
-            }
-            VariableInst(ref ty) => Action::Value(ValueSlot::Variable(const_zero(ty))),
-            LoadInst(ref ty, ref ptr) => {
-                let ptr = resolve_variable_pointer(ptr);
+            // Memory
+            Opcode::Var => Action::Value(ValueSlot::Variable(self.resolve_value(data.args()[0]))),
+            Opcode::Ld => {
+                let ptr = self.resolve_variable_pointer(data.args()[0]);
                 if !ptr.select.is_empty() {
-                    warn!("select {:?} ignored for load {:?}", ptr.select, inst);
+                    warn!(
+                        "select {:?} ignored for load {}",
+                        ptr.select,
+                        inst.dump(dfg)
+                    );
                 }
-                Action::Value(match values[&ptr.target] {
+                // TODO(fschuiki): Use the new RMW scheme here.
+                let value = match self.values[&ptr.target.unwrap_variable()] {
                     ValueSlot::Variable(ref k) => ValueSlot::Const(k.clone()),
                     _ => panic!("load target {:?} did not resolve to a variable value", ptr),
-                })
+                };
+                Action::Value(value)
             }
-            StoreInst(ref ty, ref ptr, ref value) => {
-                Action::Store(resolve_variable_pointer(ptr), resolve_value(value))
+            Opcode::St => {
+                let ptr = self.resolve_variable_pointer(data.args()[0]);
+                let value = self.resolve_value(data.args()[1]);
+                Action::Store(ptr, value)
             }
-            ShiftInst(dir, ref ty, ref target, ref insert, ref amount) if ty.is_int() => {
+
+            // Signals are simply ignored, as they are handled by the builder.
+            Opcode::Sig => Action::None,
+            Opcode::Prb => {
+                let sig = self.resolve_signal(data.args()[0]);
                 Action::Value(ValueSlot::Const(
-                    Const::new(ConstKind::Int(execute_shift_int(
-                        dir,
-                        resolve_value(target).unwrap_const().unwrap_int(),
-                        resolve_value(insert).unwrap_const().unwrap_int(),
-                        resolve_value(amount).unwrap_const().unwrap_int(),
-                    )))
-                    .into(),
+                    self.signals[sig.as_usize()].value().clone(),
                 ))
             }
-            ShiftInst(dir, ref ty, ref target, ref insert, ref amount) if ty.is_array() => {
-                let amount = resolve_value(amount);
-                let amount = amount.unwrap_const().unwrap_int().value();
-                let width = ty.unwrap_array().0;
-                let amount = if amount > &BigInt::from(width) {
-                    width
+            Opcode::Drv => {
+                let delay = self.resolve_delay(data.args()[2]);
+                let ev = Event {
+                    time: self.time_after_delay(&delay),
+                    signal: self.resolve_signal_pointer(data.args()[0]),
+                    value: self.resolve_value(data.args()[1]),
+                };
+                Action::Event(ev)
+            }
+
+            // Unary operators
+            Opcode::Not | Opcode::Neg => {
+                if ty.is_int() {
+                    let arg = self.resolve_value(data.args()[0]);
+                    let arg = arg.unwrap_int();
+                    let v = IntValue::unary_op(data.opcode(), arg);
+                    Action::Value(ValueSlot::Const(v.into()))
                 } else {
-                    amount.to_usize().unwrap()
-                };
-                // trace!("amount = {}", amount);
-                // trace!("width = {}", width);
-                let (upper_cut, lower_cut) = match dir {
-                    ShiftDir::Left => (amount, 0),
-                    ShiftDir::Right => (0, amount),
-                };
-                match **resolve_value(target).unwrap_aggregate() {
-                    AggregateKind::Array(ref a) => {
-                        use std::iter::repeat;
-                        let insert = resolve_value(insert);
-                        let elements = a.elements();
-                        let new_elements = repeat(insert.clone())
-                            .take(lower_cut)
-                            .chain(
-                                elements[lower_cut..elements.len() - upper_cut]
-                                    .iter()
-                                    .cloned(),
-                            )
-                            .chain(repeat(insert.clone()).take(upper_cut))
-                            .collect();
-                        Action::Value(ValueSlot::Const(const_array(ty.clone(), new_elements)))
-                    }
-                    ref a => panic!("target of array extract is not an array; got {:?}", a),
+                    panic!("{} on {} not supported", data.opcode(), ty);
                 }
             }
-            ShiftInst(dir, ref ty, ref target, ref insert, ref amount) if ty.is_pointer() => {
-                Action::Value(ValueSlot::VariablePointer(execute_shift_pointer(
-                    inst,
-                    dir,
-                    ty,
-                    resolve_variable_pointer(target),
-                    amount,
-                    resolve_value,
-                )))
-            }
-            ShiftInst(dir, ref ty, ref target, ref insert, ref amount) if ty.is_signal() => {
-                Action::Value(ValueSlot::SignalPointer(execute_shift_pointer(
-                    inst,
-                    dir,
-                    ty,
-                    resolve_signal_pointer(target),
-                    amount,
-                    resolve_value,
-                )))
-            }
-            ExtractInst(ref ty, ref target, SliceMode::Element(index)) if ty.is_int() => {
-                let v = resolve_value(target);
-                let v = v.unwrap_const().unwrap_int().value();
-                let v = (v >> index) % 2;
-                Action::Value(ValueSlot::Const(const_int(1, v).into()))
-            }
-            ExtractInst(ref ty, ref target, SliceMode::Slice(offset, length)) if ty.is_int() => {
-                let v = resolve_value(target);
-                let v = v.unwrap_const().unwrap_int().value();
-                let v = (v >> offset) % (BigInt::one() << length);
-                Action::Value(ValueSlot::Const(const_int(length, v).into()))
-            }
-            ExtractInst(ref ty, ref target, SliceMode::Element(index)) if ty.is_struct() => {
-                Action::Value(ValueSlot::Const(
-                    match **resolve_value(target).unwrap_aggregate() {
-                        AggregateKind::Struct(ref sa) => sa.fields()[index].clone(),
-                        ref a => panic!("target of struct extract is not a struct; got {:?}", a),
-                    },
-                ))
-            }
-            ExtractInst(ref ty, ref target, mode) if ty.is_array() => {
-                let v = resolve_value(target);
-                let elems = match **v.unwrap_aggregate() {
-                    AggregateKind::Array(ref a) => a.elements(),
-                    ref a => panic!("target of array extract is not an array; got {:?}", a),
-                };
-                Action::Value(ValueSlot::Const(match mode {
-                    SliceMode::Element(i) => elems[i].clone(),
-                    SliceMode::Slice(o, l) => const_array(
-                        array_ty(l, ty.unwrap_array().1.clone()),
-                        elems[o..o + l].to_vec(),
-                    ),
-                }))
-            }
-            ExtractInst(ref ty, ref target, mode) if ty.is_pointer() || ty.is_signal() => {
-                let adjust = |select: &mut Vec<_>| match mode {
-                    SliceMode::Element(i) => select.push(ValueSelect::Element(i)),
-                    SliceMode::Slice(o, l) => select.push(ValueSelect::Slice(o, l)),
-                };
-                Action::Value(match **ty {
-                    PointerType(..) => {
-                        let mut ptr = resolve_variable_pointer(target);
-                        ptr.discard = (0, 0);
-                        adjust(&mut ptr.select);
-                        ValueSlot::VariablePointer(ptr)
-                    }
-                    SignalType(..) => {
-                        let mut ptr = resolve_signal_pointer(target);
-                        ptr.discard = (0, 0);
-                        adjust(&mut ptr.select);
-                        ValueSlot::SignalPointer(ptr)
-                    }
-                    _ => unreachable!(),
-                })
-            }
-            InsertInst(ref ty, ref target, SliceMode::Element(index), ref value) if ty.is_int() => {
-                let target = resolve_value(target);
-                let value = resolve_value(value);
-                let target = target.unwrap_const().unwrap_int().value();
-                let value = value.unwrap_const().unwrap_int().value();
-                let bit = ((target >> index) % 2) << index;
-                let result = (target - bit) + ((value % 2) << index);
-                Action::Value(ValueSlot::Const(const_int(ty.unwrap_int(), result).into()))
-            }
-            InsertInst(ref ty, ref target, SliceMode::Slice(offset, length), ref value)
-                if ty.is_int() =>
-            {
-                let target = resolve_value(target);
-                let value = resolve_value(value);
-                let target = target.unwrap_const().unwrap_int().value();
-                let value = value.unwrap_const().unwrap_int().value();
-                let modulus = BigInt::one() << length;
-                let bits = ((target >> offset) % &modulus) << offset;
-                let result = (target - bits) + ((value % modulus) << offset);
-                Action::Value(ValueSlot::Const(const_int(ty.unwrap_int(), result).into()))
-            }
-            InsertInst(ref ty, ref target, SliceMode::Element(index), ref value)
-                if ty.is_struct() =>
-            {
-                let mut fields = match **resolve_value(target).unwrap_aggregate() {
-                    AggregateKind::Struct(ref sa) => Vec::from(sa.fields()),
-                    ref a => panic!("target of struct insert is not a struct; got {:?}", a),
-                };
-                fields[index] = resolve_value(value);
-                Action::Value(ValueSlot::Const(const_struct(fields)))
-            }
-            InsertInst(ref ty, ref target, mode, ref value) if ty.is_array() => {
-                let target = resolve_value(target);
-                let mut elems = match **target.unwrap_aggregate() {
-                    AggregateKind::Array(ref a) => a.elements().to_vec(),
-                    ref a => panic!("target of array insert is not an array; got {:?}", a),
-                };
-                match mode {
-                    SliceMode::Element(i) => elems[i] = resolve_value(value),
-                    SliceMode::Slice(o, l) => match **resolve_value(value).unwrap_aggregate() {
-                        AggregateKind::Array(ref a) => {
-                            elems[o..o + l].clone_from_slice(a.elements())
-                        }
-                        ref a => panic!("value of array insert is not an array; got {:?}", a),
-                    },
-                };
-                Action::Value(ValueSlot::Const(const_array(ty.clone(), elems)))
+
+            // Binary operators
+            Opcode::Add
+            | Opcode::Sub
+            | Opcode::And
+            | Opcode::Or
+            | Opcode::Xor
+            | Opcode::Smul
+            | Opcode::Sdiv
+            | Opcode::Smod
+            | Opcode::Srem
+            | Opcode::Umul
+            | Opcode::Udiv
+            | Opcode::Umod
+            | Opcode::Urem => {
+                if ty.is_int() {
+                    let lhs = self.resolve_value(data.args()[0]);
+                    let rhs = self.resolve_value(data.args()[1]);
+                    let lhs = lhs.unwrap_int();
+                    let rhs = rhs.unwrap_int();
+                    let v = IntValue::binary_op(data.opcode(), lhs, rhs);
+                    Action::Value(ValueSlot::Const(v.into()))
+                } else {
+                    panic!("{} on {} not supported", data.opcode(), ty);
+                }
             }
 
-            // Signal and instance instructions are simply ignored, as they are
-            // handled by the builder and only occur in entities.
-            SignalInst(..) | InstanceInst(..) => Action::None,
+            // Comparisons
+            Opcode::Eq
+            | Opcode::Neq
+            | Opcode::Slt
+            | Opcode::Sgt
+            | Opcode::Sle
+            | Opcode::Sge
+            | Opcode::Ult
+            | Opcode::Ugt
+            | Opcode::Ule
+            | Opcode::Uge => {
+                if ty.is_int() {
+                    let lhs = self.resolve_value(data.args()[0]);
+                    let rhs = self.resolve_value(data.args()[1]);
+                    let lhs = lhs.unwrap_int();
+                    let rhs = rhs.unwrap_int();
+                    let v = IntValue::compare_op(data.opcode(), lhs, rhs);
+                    Action::Value(ValueSlot::Const(v.into()))
+                } else {
+                    panic!("{} on {} not supported", data.opcode(), ty);
+                }
+            }
 
-            HaltInst => Action::Suspend(None, InstanceState::Done),
-            _ => panic!("unsupported instruction {:#?}", inst),
+            // Shifts
+            Opcode::Shl | Opcode::Shr => {
+                let (base, hidden) = if ty.is_pointer() {
+                    (
+                        self.resolve_variable_pointer(data.args()[0]),
+                        self.resolve_variable_pointer(data.args()[1]),
+                    )
+                } else if ty.is_signal() {
+                    (
+                        self.resolve_signal_pointer(data.args()[0]),
+                        self.resolve_signal_pointer(data.args()[1]),
+                    )
+                } else {
+                    (
+                        self.resolve_value_pointer(data.args()[0]),
+                        self.resolve_value_pointer(data.args()[1]),
+                    )
+                };
+                let amount = self.resolve_value(data.args()[2]);
+                let ptr = self.exec_shift(data.opcode(), &base, &hidden, &amount);
+                if ty.is_pointer() {
+                    Action::Value(ValueSlot::VariablePointer(ptr))
+                } else if ty.is_signal() {
+                    Action::Value(ValueSlot::SignalPointer(ptr))
+                } else {
+                    Action::Value(ValueSlot::Const(self.read_pointer(&ty, &ptr)))
+                }
+            }
+
+            // Insert and extract fields and slices
+            Opcode::InsField | Opcode::InsSlice => {
+                let target = self.resolve_value_pointer(data.args()[0]);
+                let target_ty = dfg.value_type(data.args()[0]);
+                let value = self.resolve_value(data.args()[1]);
+                let ptr = self.exec_insext(data.opcode(), &target_ty, &target, data.imms());
+                let mut results = [self.resolve_value(data.args()[0])];
+                write_pointer(&ptr, &mut results, &value);
+                let [result] = results;
+                Action::Value(ValueSlot::Const(result))
+            }
+            Opcode::ExtField | Opcode::ExtSlice => {
+                let target = if ty.is_pointer() {
+                    self.resolve_variable_pointer(data.args()[0])
+                } else if ty.is_signal() {
+                    self.resolve_signal_pointer(data.args()[0])
+                } else {
+                    self.resolve_value_pointer(data.args()[0])
+                };
+                let target_ty = dfg.value_type(data.args()[0]);
+                let ptr = self.exec_insext(data.opcode(), &target_ty, &target, data.imms());
+                if ty.is_pointer() {
+                    Action::Value(ValueSlot::VariablePointer(ptr))
+                } else if ty.is_signal() {
+                    Action::Value(ValueSlot::SignalPointer(ptr))
+                } else {
+                    Action::Value(ValueSlot::Const(self.read_pointer(&ty, &ptr)))
+                }
+            }
+
+            // Multiplexing
+            Opcode::Mux => {
+                let ways = self.resolve_value(data.args()[0]);
+                let index = self.resolve_value(data.args()[1]);
+                match ways {
+                    Value::Array(v) => {
+                        let index = index.unwrap_int().to_usize();
+                        let index = std::cmp::min(v.0.len() - 1, index);
+                        Action::Value(ValueSlot::Const(v.extract_field(index)))
+                    }
+                    _ => panic!("mux on {}", ways),
+                }
+            }
+
+            // Instantiations are handled by the builder.
+            Opcode::Inst => Action::None,
+
+            // Halt trivially suspends the process indefinitely.
+            Opcode::Halt => Action::Suspend(None, InstanceState::Done),
+
+            // TODO(fschuiki): Implement the rest or explicitly report errors
+            // upon encountering unsupported instructions.
+            opc => unimplemented!("{:?}", opc),
+        }
+    }
+
+    /// Resolve a value to a constant.
+    fn resolve_value(&self, id: llhd::ir::Value) -> Value {
+        match self.values.get(&id) {
+            Some(ValueSlot::Const(k)) => k.clone(),
+            x => panic!(
+                "expected value {:?} to resolve to a constant, got {:?}",
+                id, x
+            ),
+        }
+    }
+
+    // Resolve a value ref to a constant time value.
+    fn resolve_delay(&self, id: llhd::ir::Value) -> TimeValue {
+        let v = self.resolve_value(id);
+        match v.get_time() {
+            Some(x) => x.clone(),
+            None => panic!(
+                "expected value {:?} to resolve to a time constant, got {:?}",
+                id, v
+            ),
+        }
+    }
+
+    // Resolve a value to a signal.
+    fn resolve_signal(&self, id: llhd::ir::Value) -> SignalRef {
+        match self.values.get(&id) {
+            Some(ValueSlot::Signal(r)) => *r,
+            x => panic!(
+                "expected value {:?} to resolve to a signal, got {:?}",
+                id, x
+            ),
+        }
+    }
+
+    // Resolve a value to a variable pointer.
+    fn resolve_variable_pointer(&self, id: llhd::ir::Value) -> ValuePointer {
+        match self.values.get(&id) {
+            Some(ValueSlot::Variable(_)) => ValuePointer {
+                target: ValueTarget::Variable(id),
+                select: vec![],
+                discard: (0, 0),
+                slices: vec![ValueSlice {
+                    target: ValueTarget::Variable(id),
+                    select: vec![],
+                    width: self.pointer_width(id),
+                }],
+            },
+            Some(ValueSlot::VariablePointer(ref ptr)) => ptr.clone(),
+            x => panic!(
+                "expected value {:?} to resolve to a variable pointer, got {:?}",
+                id, x
+            ),
+        }
+    }
+
+    // Resolve a value to a signal pointer.
+    fn resolve_signal_pointer(&self, id: llhd::ir::Value) -> ValuePointer {
+        match self.values.get(&id) {
+            Some(ValueSlot::Signal(sig)) => ValuePointer {
+                target: ValueTarget::Signal(*sig),
+                select: vec![],
+                discard: (0, 0),
+                slices: vec![ValueSlice {
+                    target: ValueTarget::Signal(*sig),
+                    select: vec![],
+                    width: self.pointer_width(id),
+                }],
+            },
+            Some(ValueSlot::SignalPointer(ref ptr)) => ptr.clone(),
+            x => panic!(
+                "expected value {:?} to resolve to a signal pointer, got {:?}",
+                id, x
+            ),
+        }
+    }
+
+    // Resolve a value to a value pointer.
+    fn resolve_value_pointer(&self, id: llhd::ir::Value) -> ValuePointer {
+        ValuePointer {
+            target: ValueTarget::Value(id),
+            select: vec![],
+            discard: (0, 0),
+            slices: vec![ValueSlice {
+                target: ValueTarget::Value(id),
+                select: vec![],
+                width: self.pointer_width(id),
+            }],
+        }
+    }
+
+    /// Determine the pointer result type.
+    fn pointer_result_type<'b>(&self, ty: &'b llhd::Type) -> &'b llhd::Type {
+        match **ty {
+            llhd::PointerType(ref ty) => ty,
+            llhd::SignalType(ref ty) => ty,
+            _ => ty,
+        }
+    }
+
+    /// Determine the width of a pointer or value, for the purpose of pointer
+    /// operations.
+    ///
+    /// Returns the length of arrays or integers, or 0 for structs.
+    fn pointer_width(&self, id: llhd::ir::Value) -> usize {
+        let ty = self.dfg.value_type(id);
+        let ty = match &*ty {
+            llhd::PointerType(ty) => ty,
+            llhd::SignalType(ty) => ty,
+            _ => &ty,
         };
-
-        action
+        match **ty {
+            llhd::IntType(w) => w,
+            llhd::ArrayType(w, _) => w,
+            llhd::StructType(..) => 0,
+            _ => panic!("{} has no pointer width", ty),
+        }
     }
 
     /// Calculate the time at which an event occurs, given an optional delay. If
     /// the delay is omitted, the next delta cycle is returned.
-    fn time_after_delay(&self, delay: &ConstTime) -> ConstTime {
+    fn time_after_delay(&self, delay: &TimeValue) -> TimeValue {
         use num::{zero, Zero};
-        let mut time = self.state.time().time().clone();
-        let mut delta = self.state.time().delta().clone();
-        let mut epsilon = self.state.time().epsilon().clone();
+        let mut time = self.time.time().clone();
+        let mut delta = self.time.delta();
+        let mut epsilon = self.time.epsilon();
         if !delay.time().is_zero() {
-            time = time + delay.time();
-            delta = zero();
-            epsilon = zero();
+            time += delay.time();
+            delta = 0;
+            epsilon = 0;
         }
-        if !delay.delta().is_zero() {
-            delta = delta + delay.delta();
-            epsilon = zero();
+        if delay.delta() != 0 {
+            delta += delay.delta();
+            epsilon = 0;
         }
-        epsilon = epsilon + delay.epsilon();
-        ConstTime::new(time, delta, epsilon)
+        epsilon += delay.epsilon();
+        TimeValue::new(time, delta, epsilon)
     }
 
     /// Calculate the absolute time of the next delta step.
-    fn time_after_delta(&self) -> ConstTime {
-        ConstTime::new(
-            self.state.time().time().clone(),
-            self.state.time().delta() + 1,
-            num::zero(),
-        )
+    fn time_after_delta(&self) -> TimeValue {
+        TimeValue::new(self.time.time().clone(), self.time.delta() + 1, 0)
+    }
+
+    /// Read the target value of a pointer.
+    pub fn read_pointer(&self, ty: &llhd::Type, ptr: &ValuePointer) -> Value {
+        trace!("Read pointer as {}; {:?}", ty, ptr);
+
+        // Map each slice to its corresponding subresult.
+        let mut results = ptr
+            .slices
+            .iter()
+            .map(|s| (self.read_pointer_slice(s), s.width));
+
+        // Determine the type of the resulting value.
+        let inner_ty = match **ty {
+            llhd::PointerType(ref ty) => ty,
+            llhd::SignalType(ref ty) => ty,
+            _ => ty,
+        };
+
+        // Otherwise concatenate the results.
+        match **ty {
+            llhd::IntType(w) => {
+                let mut value = IntValue::from_usize(w, 0);
+                let mut offset = 0;
+                for (result, width) in results {
+                    value.insert_slice(offset, width, result.unwrap_int());
+                    offset += width;
+                }
+                assert_eq!(offset, w);
+                value.into()
+            }
+            llhd::ArrayType(w, _) => {
+                let mut values = vec![];
+                for (result, _) in results {
+                    values.extend(result.unwrap_array().0.iter().cloned());
+                }
+                assert_eq!(values.len(), w);
+                ArrayValue::new(values).into()
+            }
+            _ if ptr.slices.len() == 1 => results.next().unwrap().0,
+            _ => panic!("multi-slice concat on {}", ty),
+        }
+    }
+
+    /// Read the target value of a pointer slice.
+    pub fn read_pointer_slice(&self, ptr: &ValueSlice) -> Value {
+        let mut value = self.read_pointer_target(ptr.target);
+        for &select in &ptr.select {
+            match select {
+                ValueSelect::Field(idx) => match value {
+                    Value::Array(v) => value = v.extract_field(idx),
+                    Value::Struct(v) => value = v.extract_field(idx),
+                    _ => panic!("access field {} in {} ({:?})", idx, value, ptr.target),
+                },
+                ValueSelect::Slice(off, len) => match value {
+                    Value::Int(v) => value = v.extract_slice(off, len).into(),
+                    Value::Array(v) => value = v.extract_slice(off, len).into(),
+                    _ => panic!(
+                        "access slice {},{} in {} ({:?})",
+                        off, len, value, ptr.target
+                    ),
+                },
+            }
+        }
+        value
+    }
+
+    /// Read the value of a pointer target.
+    pub fn read_pointer_target(&self, target: ValueTarget) -> Value {
+        match target {
+            ValueTarget::Value(v) => self.resolve_value(v),
+            ValueTarget::Variable(v) => match self.values[&v] {
+                ValueSlot::Variable(ref k) => k.clone(),
+                _ => panic!(
+                    "pointer target {:?} did not resolve to a variable value",
+                    target
+                ),
+            },
+            ValueTarget::Signal(v) => self.signals[v.as_usize()].value().clone(),
+        }
+    }
+
+    /// Execute a shift operation.
+    ///
+    /// This merely modifies pointers. Actual computation of the shift result
+    /// is performed in `read_pointer`.
+    pub fn exec_shift(
+        &self,
+        op: Opcode,
+        base: &ValuePointer,
+        hidden: &ValuePointer,
+        amount: &Value,
+    ) -> ValuePointer {
+        // Map the shift amount to a usize and clamp to the maximum shift.
+        let amount = amount.unwrap_int().to_usize();
+        let amount = std::cmp::min(hidden.width(), amount);
+
+        // Compute the length of the selected slices from the base and hidden
+        // pointers.
+        let base_len = base.width() as isize - amount as isize;
+        let hidden_len = amount as isize;
+
+        // Compute the offsets of the selected slice from the base and hidden
+        // pointers, and determine whether in the output the base or hidden
+        // values come first (i.e. shift the hidden in at the bottom or top).
+        let (base_off, hidden_off, base_first) = match op {
+            Opcode::Shl => (0, hidden.width() as isize - amount as isize, false),
+            Opcode::Shr => (amount as isize, 0, true),
+            _ => panic!("{} is not a shift op", op),
+        };
+        let base_slice = (base_off, base_len);
+        let hidden_slice = (hidden_off, hidden_len);
+
+        // Assemble an iterator over the base and hidden pointers, plus their
+        // slicing information, in the right order.
+        let order = match base_first {
+            true => vec![base, hidden]
+                .into_iter()
+                .zip(vec![base_slice, hidden_slice].into_iter()),
+            false => vec![hidden, base]
+                .into_iter()
+                .zip(vec![hidden_slice, base_slice].into_iter()),
+        };
+
+        // Create an updated set of pointer slices by fusing the base and hidden
+        // pointers according to the slicing and ordering determined above.
+        trace!("Evaluating shift by {}", amount);
+        let slices = order
+            .flat_map(|(ptr, (off, len))| {
+                ptr.offset_slices().flat_map(move |(slice_offset, slice)| {
+                    use std::cmp::{max, min};
+                    let clamp = |x| max(0isize, min(slice.width as isize, x)) as usize;
+
+                    // Translate the offset and length determined for the shift
+                    // to the slice-local equivalent.
+                    let actual_off = clamp(off - slice_offset as isize);
+                    let actual_end = clamp(off + len - slice_offset as isize);
+                    let actual_len = actual_end - actual_off;
+
+                    trace!(
+                        "  {}: {:?} to {},{} (act {},{})",
+                        slice_offset,
+                        slice,
+                        off,
+                        len,
+                        actual_off,
+                        actual_len
+                    );
+
+                    // Extract exactly the slice determined above.
+                    if actual_off == 0 && actual_len == slice.width {
+                        Some(slice.clone())
+                    } else if actual_len == 0 {
+                        None
+                    } else {
+                        let mut s = slice.clone();
+                        s.width = actual_len;
+                        s.select.push(ValueSelect::Slice(actual_off, actual_len));
+                        Some(s)
+                    }
+                })
+            })
+            .collect();
+
+        let p = ValuePointer {
+            target: base.target, // DUMMY
+            select: vec![],      // DUMMY
+            discard: (0, 0),     // DUMMY
+            slices,
+        };
+
+        trace!("Shfited pointer:");
+        for (offset, slice) in p.offset_slices() {
+            trace!("  {}: {:?}", offset, slice);
+        }
+
+        p
+    }
+
+    /// Execute an insert or extract operation.
+    ///
+    /// This merely modifies pointers. Actual computation of the insertion or
+    /// extraction result is performed in `read_pointer`.
+    pub fn exec_insext(
+        &self,
+        op: Opcode,
+        target_ty: &llhd::Type,
+        target: &ValuePointer,
+        imms: &[usize],
+    ) -> ValuePointer {
+        match op {
+            // Field accesses simply go through the slices until they find the
+            // one which is being targeted, at which point that specific slice
+            // is extracted and a `Field(..)` access is added.
+            Opcode::InsField | Opcode::ExtField => {
+                let field = imms[0];
+                for (offset, slice) in target.offset_slices() {
+                    // Match this slice if it's either a struct slice, or the
+                    // accessed index is in range.
+                    if slice.width == 0 || (field >= offset && field < offset + slice.width) {
+                        let mut s = slice.clone();
+                        let ty = match **target_ty {
+                            llhd::PointerType(ref ty) => ty,
+                            llhd::SignalType(ref ty) => ty,
+                            _ => target_ty,
+                        };
+                        let field_ty = match **ty {
+                            llhd::ArrayType(_, ref ty) => ty,
+                            llhd::StructType(ref f) => &f[field],
+                            _ => panic!("cannot field access into {}", ty),
+                        };
+                        s.width = match **field_ty {
+                            llhd::IntType(w) => w,
+                            llhd::ArrayType(w, _) => w,
+                            _ => 0,
+                        };
+                        s.select.push(ValueSelect::Field(field - offset));
+                        return ValuePointer {
+                            target: target.target, // DUMMY
+                            select: vec![],        // DUMMY
+                            discard: (0, 0),       // DUMMY
+                            slices: vec![s],
+                        };
+                    }
+                }
+                panic!("field {} out of bounds in {:?}", field, target);
+            }
+
+            // Slice accesses go through the slices and filter out all the ones
+            // that do not fall within the range, and adjust the ranges of the
+            // ones that do.
+            Opcode::InsSlice | Opcode::ExtSlice => {
+                let offset = imms[0];
+                let length = imms[1];
+                let mut slices = vec![];
+                for (slice_offset, slice) in target.offset_slices() {
+                    use std::cmp::{max, min};
+                    let clamp = |x| max(0isize, min(slice.width as isize, x)) as usize;
+
+                    // Shift the global slice bounds into this slice's domain.
+                    let actual_off = clamp(offset as isize - slice_offset as isize);
+                    let actual_end =
+                        clamp(offset as isize + length as isize - slice_offset as isize);
+                    let actual_len = actual_end - actual_off;
+
+                    trace!(
+                        "  {}: {:?} to {},{} (act {},{})",
+                        slice_offset,
+                        slice,
+                        offset,
+                        length,
+                        actual_off,
+                        actual_len
+                    );
+
+                    // Extract exactly the slice determined above.
+                    if actual_off == 0 && actual_len == slice.width {
+                        slices.push(slice.clone());
+                    } else if actual_len == 0 {
+                        continue;
+                    } else {
+                        let mut s = slice.clone();
+                        s.width = actual_len;
+                        s.select.push(ValueSelect::Slice(actual_off, actual_len));
+                        slices.push(s);
+                    }
+                }
+                ValuePointer {
+                    target: target.target, // DUMMY
+                    select: vec![],        // DUMMY
+                    discard: (0, 0),       // DUMMY
+                    slices,
+                }
+            }
+
+            _ => panic!("{} is not an insert/extract op", op),
+        }
     }
 }
 
@@ -646,15 +1102,15 @@ enum Action {
     Value(ValueSlot),
     /// Change another value's entry in the value table. Used by instructions
     /// to simulate writing to memory.
-    Store(ValuePointer<ValueId>, ValueRef),
+    Store(ValuePointer, Value),
     /// Add an event to the event queue.
     Event(Event),
     /// Transfer control to a different block, executing that block's
     /// instructions.
-    Jump(BlockRef),
+    Jump(llhd::ir::Block),
     /// Suspend execution of the current instance and change the instance's
     /// state.
-    Suspend(Option<BlockRef>, InstanceState),
+    Suspend(Option<llhd::ir::Block>, InstanceState),
 }
 
 impl std::fmt::Display for Action {
@@ -662,351 +1118,84 @@ impl std::fmt::Display for Action {
         match *self {
             Action::None => write!(f, "<no action>"),
             Action::Value(ref v) => write!(f, "= {:?}", v),
-            Action::Store(ref ptr, ref v) => write!(f, "*i{} = {:?}", ptr.target, v),
+            Action::Store(ref ptr, ref v) => {
+                write!(f, "*i{} = {:?}", ptr.target.unwrap_variable(), v)
+            }
             Action::Event(ref ev) => write!(f, "@{} {:?} <= {:?}", ev.time, ev.signal, ev.value),
             Action::Jump(..) | Action::Suspend(..) => write!(f, "{:?}", self),
         }
     }
 }
 
-fn execute_unary(op: UnaryOp, arg: &ConstInt) -> ConstInt {
-    ConstInt::new(
-        arg.width(),
-        match op {
-            UnaryOp::Not => bigint_bitwise_unary(arg.width(), arg.value(), |arg| !arg),
-        },
-    )
-}
-
-fn execute_binary(op: BinaryOp, lhs: &ConstInt, rhs: &ConstInt) -> ConstInt {
-    use num::Integer;
-    use std::ops::Rem;
-    ConstInt::new(
-        lhs.width(),
-        match op {
-            BinaryOp::Add => lhs.value() + rhs.value(),
-            BinaryOp::Sub => lhs.value() - rhs.value(),
-            BinaryOp::Mul => lhs.value() * rhs.value(),
-            BinaryOp::Div => lhs.value() / rhs.value(),
-            BinaryOp::Mod => lhs.value().mod_floor(rhs.value()),
-            BinaryOp::Rem => lhs.value().rem(rhs.value()),
-            BinaryOp::And => {
-                bigint_bitwise_binary(lhs.width(), lhs.value(), rhs.value(), |lhs, rhs| lhs & rhs)
+/// Modify a pointer.
+///
+/// This applies a value to a pointer and returns the modified values for
+/// each of the pointer slices.
+pub fn write_pointer(ptr: &ValuePointer, into: &mut [Value], value: &Value) {
+    for (i, (off, s)) in ptr.offset_slices().enumerate() {
+        // Extract the slice of the value that maps to this pointer
+        // slice.
+        let subvalue = if s.width != 0 {
+            match value {
+                Value::Int(v) => v.extract_slice(off, s.width).into(),
+                Value::Array(v) => v.extract_slice(off, s.width).into(),
+                _ => panic!(
+                    "cannot slice {} into {},{} for write to pointer slice {:?}",
+                    value, off, s.width, s
+                ),
             }
-            BinaryOp::Or => {
-                bigint_bitwise_binary(lhs.width(), lhs.value(), rhs.value(), |lhs, rhs| lhs | rhs)
-            }
-            BinaryOp::Xor => {
-                bigint_bitwise_binary(lhs.width(), lhs.value(), rhs.value(), |lhs, rhs| lhs ^ rhs)
-            }
-        },
-    )
-}
+        } else {
+            value.clone()
+        };
 
-/// Evaluate a unary bitwise logic operation on a big integer.
-fn bigint_bitwise_unary<F>(width: usize, arg: &BigInt, op: F) -> BigInt
-where
-    F: Fn(u8) -> u8,
-{
-    use num::bigint::Sign;
-    use std::iter::repeat;
-    let mut bytes: Vec<u8> = make_unsigned(width, arg)
-        .to_bytes_le()
-        .into_iter()
-        .chain(repeat(0))
-        .map(op)
-        .take((width + 7) / 8)
-        .collect();
-    let unused_bits = bytes.len() * 8 - width;
-    *bytes.last_mut().unwrap() &= 0xFF >> unused_bits;
-    BigInt::from_bytes_le(Sign::Plus, &bytes)
-}
-
-/// Evaluate a binary bitwise logic operation between two big integers.
-fn bigint_bitwise_binary<F>(width: usize, lhs: &BigInt, rhs: &BigInt, op: F) -> BigInt
-where
-    F: Fn(u8, u8) -> u8,
-{
-    use num::bigint::Sign;
-    use std::iter::repeat;
-    let mut bytes: Vec<u8> = make_unsigned(width, lhs)
-        .to_bytes_le()
-        .into_iter()
-        .chain(repeat(0))
-        .zip(
-            make_unsigned(width, rhs)
-                .to_bytes_le()
-                .into_iter()
-                .chain(repeat(0)),
-        )
-        .map(|(l, r)| op(l, r))
-        .take((width + 7) / 8)
-        .collect();
-    let unused_bits = bytes.len() * 8 - width;
-    *bytes.last_mut().unwrap() &= 0xFF >> unused_bits;
-    BigInt::from_bytes_le(Sign::Plus, &bytes)
-}
-
-/// Convert the signed big integer into an unsigned big integer, taking the
-/// two's complement if the argument is negative.
-fn make_unsigned(width: usize, arg: &BigInt) -> BigUint {
-    use num::bigint::Sign;
-    use num::pow;
-    match arg.sign() {
-        Sign::Plus | Sign::NoSign => arg.to_biguint(),
-        Sign::Minus => (pow(BigInt::from(2), width) - arg).to_biguint(),
-    }
-    .unwrap()
-}
-
-fn execute_comparison(op: CompareOp, lhs: &ConstInt, rhs: &ConstInt) -> bool {
-    match op {
-        CompareOp::Eq => lhs.value() == rhs.value(),
-        CompareOp::Neq => lhs.value() != rhs.value(),
-        CompareOp::Slt => lhs.value() < rhs.value(),
-        CompareOp::Sle => lhs.value() <= rhs.value(),
-        CompareOp::Sgt => lhs.value() > rhs.value(),
-        CompareOp::Sge => lhs.value() >= rhs.value(),
-        CompareOp::Ult => {
-            make_unsigned(lhs.width(), lhs.value()) < make_unsigned(rhs.width(), rhs.value())
-        }
-        CompareOp::Ule => {
-            make_unsigned(lhs.width(), lhs.value()) <= make_unsigned(rhs.width(), rhs.value())
-        }
-        CompareOp::Ugt => {
-            make_unsigned(lhs.width(), lhs.value()) > make_unsigned(rhs.width(), rhs.value())
-        }
-        CompareOp::Uge => {
-            make_unsigned(lhs.width(), lhs.value()) >= make_unsigned(rhs.width(), rhs.value())
-        }
+        // Write to this pointer slice.
+        write_pointer_slice(s, &mut into[i], subvalue);
     }
 }
 
-/// Execute a shift instruction on an integer target.
-fn execute_shift_int(
-    dir: ShiftDir,
-    target: &ConstInt,
-    insert: &ConstInt,
-    amount: &ConstInt,
-) -> ConstInt {
-    let shifted = match dir {
-        ShiftDir::Left => {
-            target.value() << amount.value().to_usize().expect("shift amount too large")
-        }
-        ShiftDir::Right => {
-            target.value() >> amount.value().to_usize().expect("shift amount too large")
-        }
-    };
-    ConstInt::new(target.width(), shifted)
+/// Modify a pointer slice.
+///
+/// This applies a value to a pointer slice and returns the modified value.
+pub fn write_pointer_slice(ptr: &ValueSlice, into: &mut Value, value: Value) {
+    // trace!("writing {} to {:?}", value, ptr);
+    write_pointer_select(&ptr.select, into, value);
 }
 
-/// Execute a shift instruction on a pointer target.
-fn execute_shift_pointer<T>(
-    inst: &Inst,
-    dir: ShiftDir,
-    ty: &Type,
-    mut ptr: ValuePointer<T>,
-    amount: &ValueRef,
-    resolve_value: impl FnOnce(&ValueRef) -> ValueRef,
-) -> ValuePointer<T> {
-    let amount = resolve_value(amount)
-        .unwrap_const()
-        .unwrap_int()
-        .value()
-        .to_usize()
-        .unwrap();
-    let width = match **ty {
-        PointerType(ref ty) | SignalType(ref ty) => match **ty {
-            IntType(w) => w,
-            ArrayType(w, _) => w,
-            _ => panic!(
-                "type {} incompatible with shl/shr operation; {:#?}",
-                ty, inst
-            ),
-        },
-        _ => unreachable!(),
-    };
-    let amount = std::cmp::min(amount, width);
-    match dir {
-        ShiftDir::Left => {
-            ptr.discard.1 += amount;
-            ptr.select.push(ValueSelect::Slice(0, width - amount));
-        }
-        ShiftDir::Right => {
-            ptr.discard.0 += amount;
-            ptr.select.push(ValueSelect::Slice(amount, width - amount));
-        }
-    }
-    ptr
-}
-
-fn value_type(v: &ValueRef) -> Type {
-    match v {
-        ValueRef::Const(k) => k.ty(),
-        ValueRef::Aggregate(k) => k.ty(),
-        _ => panic!("cannot determine type of {:?}", v),
-    }
-}
-
-/// Modify a value according to a pointer.
-fn modify_pointed_value<T>(ptr: &ValuePointer<T>, current: &ValueRef, new: ValueRef) -> ValueRef {
-    let new = if ptr.discard != (0, 0) {
-        let (left, right) = ptr.discard;
-        // trace!("discard ({}, {}) of {:?}", left, right, new);
-        match new {
-            ValueRef::Const(k) => match *k {
-                ConstKind::Int(ref ki) => {
-                    let v = ki.value() % (BigInt::one() << (ki.width() - left));
-                    let v = v >> right;
-                    // trace!("{} => {}", ki.value(), v);
-                    const_int(ki.width() - left - right, v).into()
-                }
-                _ => panic!("cannot discard {:?} on constant {:?}", ptr.discard, k),
-            },
-            // ValueRef::Aggregate(a) => new.clone(),
-            _ => panic!("cannot discard {:?} on value {:?}", ptr.discard, new),
-        }
-    } else {
-        new
-    };
-    modify_selected_value(&ptr.select, current, new)
-}
-
-/// Modify a value according to a sequence of selection operations.
-fn modify_selected_value(select: &[ValueSelect], current: &ValueRef, new: ValueRef) -> ValueRef {
+/// Modify a pointer selection.
+///
+/// This applies one single select operation to a pointer. Modifies the
+/// value and returns an updated version.
+pub fn write_pointer_select(select: &[ValueSelect], into: &mut Value, value: Value) {
     if select.is_empty() {
-        // assert_eq!(value_type(current), value_type(&new));
-        return new;
+        *into = value;
+        return;
     }
     match select[0] {
-        ValueSelect::Element(index) => {
-            // trace!("element {} of {:?}", index, current);
-            match current {
-                ValueRef::Const(k) => match **k {
-                    ConstKind::Int(ref ki) => {
-                        let current_bit: BigInt = (ki.value() >> index) % 2;
-                        let modified_bit = {
-                            modify_selected_value(
-                                &select[1..],
-                                &const_int(1, current_bit.clone()).into(),
-                                new,
-                            )
-                            .unwrap_const()
-                            .unwrap_int()
-                            .value()
-                                % 2
-                        };
-                        let modified =
-                            ki.value() - (current_bit << index) + (modified_bit << index);
-                        // trace!("{} => {}", ki.value(), modified);
-                        const_int(ki.width(), modified).into()
-                    }
-                    _ => panic!("cannot select {:?} on constant {:?}", select[0], k),
-                },
-                ValueRef::Aggregate(a) => match **a {
-                    AggregateKind::Struct(ref a) => {
-                        let mut fields = a.fields().to_vec();
-                        fields[index] =
-                            modify_selected_value(&select[1..], &a.fields()[index], new);
-                        const_struct(fields).into()
-                    }
-                    AggregateKind::Array(ref a) => {
-                        let mut elements = a.elements().to_vec();
-                        elements[index] =
-                            modify_selected_value(&select[1..], &elements[index], new);
-                        const_array(a.ty().clone(), elements)
-                    }
-                },
-                _ => panic!("cannot select {:?} on value {:?}", select[0], current),
+        ValueSelect::Field(index) => match into {
+            Value::Array(v) => {
+                let mut sub = v.extract_field(index);
+                write_pointer_select(&select[1..], &mut sub, value);
+                v.insert_field(index, sub);
             }
-        }
-        ValueSelect::Slice(offset, length) => {
-            // trace!("slice ({}, {}) of {:?}", offset, length, current);
-            match current {
-                ValueRef::Const(k) => match **k {
-                    ConstKind::Int(ref ki) => {
-                        let kui = &ki.value().to_biguint().unwrap();
-                        let mod_len = BigUint::one() << length;
-                        let mod_off = BigUint::one() << offset;
-                        let lower = kui % mod_off;
-                        let upper = (kui >> (length + offset)) << (length + offset);
-                        let vc = (kui >> offset) % mod_len;
-                        let vn = modify_selected_value(
-                            &select[1..],
-                            &const_int(length, vc.into()).into(),
-                            new,
-                        )
-                        .unwrap_const()
-                        .unwrap_int()
-                        .value()
-                        .to_biguint()
-                        .unwrap();
-                        let v = upper | (vn << offset) | lower;
-                        // trace!("{} => {}", kui, v);
-                        const_int(ki.width(), v.into()).into()
-                    }
-                    _ => panic!("cannot select {:?} on constant {:?}", select[0], k),
-                },
-                ValueRef::Aggregate(a) => match **a {
-                    AggregateKind::Array(ref a) => {
-                        let mut elements = a.elements().to_vec();
-                        let modified = modify_selected_value(
-                            &select[1..],
-                            &const_array(
-                                array_ty(length, a.ty().unwrap_array().1.clone()),
-                                elements[offset..offset + length].to_vec(),
-                            ),
-                            new,
-                        );
-                        let modified = match **modified.unwrap_aggregate() {
-                            AggregateKind::Array(ref a) => a.elements(),
-                            _ => panic!("modified selected value {:?} is not an array", modified),
-                        };
-                        elements[offset..offset + length].clone_from_slice(modified);
-                        const_array(a.ty().clone(), elements)
-                    }
-                    _ => panic!("cannot select {:?} on aggregate {:?}", select[0], a),
-                },
-                _ => panic!("cannot select {:?} on value {:?}", select[0], current),
+            Value::Struct(v) => {
+                let mut sub = v.extract_field(index);
+                write_pointer_select(&select[1..], &mut sub, value);
+                v.insert_field(index, sub);
             }
-        }
-    }
-}
-
-fn stringify_value(value: &ValueRef) -> String {
-    match *value {
-        ValueRef::Const(ref k) => match **k {
-            ConstKind::Int(ref v) => format!("{}", v.value()),
-            ConstKind::Time(ref t) => format!("{}", t),
+            _ => panic!("access field {} in {}", index, into),
         },
-        ValueRef::Aggregate(ref a) => match **a {
-            AggregateKind::Struct(ref a) => {
-                let mut s = String::from("{");
-                let mut first = true;
-                for f in a.fields() {
-                    if !first {
-                        s.push_str(", ");
-                    }
-                    s.push_str(&stringify_value(f));
-                    first = false;
-                }
-                s.push('}');
-                s
+        ValueSelect::Slice(offset, length) => match into {
+            Value::Int(ref mut v) => {
+                let mut sub = v.extract_slice(offset, length).into();
+                write_pointer_select(&select[1..], &mut sub, value);
+                v.insert_slice(offset, length, sub.unwrap_int());
             }
-            AggregateKind::Array(ref a) => {
-                let mut s = String::from("[");
-                let mut first = true;
-                for e in a.elements() {
-                    if !first {
-                        s.push_str(", ");
-                    }
-                    s.push_str(&stringify_value(e));
-                    first = false;
-                }
-                s.push(']');
-                s
+            Value::Array(v) => {
+                let mut sub = v.extract_slice(offset, length).into();
+                write_pointer_select(&select[1..], &mut sub, value);
+                v.insert_slice(offset, length, sub.unwrap_array());
             }
+            _ => panic!("access slice {},{} in {}", offset, length, into),
         },
-        _ => format!("{:?}", value),
     }
 }

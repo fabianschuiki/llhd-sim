@@ -2,107 +2,121 @@
 
 //! The simulation state.
 
-use llhd::{Block, ConstTime, Entity, Module, ModuleContext, Process, Type, ValueId, ValueRef};
+#![allow(unused_imports)]
+
+use crate::value::{Time, Value};
+use llhd::ir::Unit;
 use num::zero;
 use std::{
     cmp::Ordering,
     collections::{BinaryHeap, HashMap},
+    fmt,
+    ops::{Index, IndexMut},
     sync::Mutex,
 };
 
-pub struct State<'tm> {
-    module: &'tm Module,
-    context: ModuleContext<'tm>,
-    time: ConstTime,
-    signals: Vec<Signal>,
-    probes: HashMap<SignalRef, Vec<String>>,
-    scope: Scope,
-    insts: Vec<Mutex<Instance<'tm>>>,
-    events: BinaryHeap<Event>,
-    timed: BinaryHeap<TimedInstance>,
+/// A simulation state.
+pub struct State<'ll> {
+    /// The LLHD module being simulated.
+    pub module: &'ll llhd::ir::Module,
+    /// The signals present in the simulation.
+    pub signals: Vec<Signal>,
+    /// The probed signals.
+    pub probes: HashMap<SignalRef, Vec<String>>,
+    /// The root scope of the simulation.
+    pub scope: Scope,
+    /// The process and entity instances in the simulation.
+    pub insts: Vec<Mutex<Instance<'ll>>>,
+    /// The current simulation time.
+    pub time: Time,
+
+    /// The current state of the event queue.
+    pub events: BinaryHeap<Event>,
+    /// The current wakeup queue for instances.
+    pub timed: BinaryHeap<TimedInstance>,
 }
 
-impl<'tm> State<'tm> {
-    /// Create a new simulation state.
-    pub fn new(
-        module: &'tm Module,
-        signals: Vec<Signal>,
-        probes: HashMap<SignalRef, Vec<String>>,
-        scope: Scope,
-        insts: Vec<Mutex<Instance<'tm>>>,
-    ) -> State<'tm> {
-        State {
-            module: module,
-            context: ModuleContext::new(module),
-            time: ConstTime::new(zero(), zero(), zero()),
-            signals,
-            probes,
-            scope,
-            insts,
-            events: BinaryHeap::new(),
-            timed: BinaryHeap::new(),
-        }
-    }
+impl<'ll> State<'ll> {
+    //     /// Create a new simulation state.
+    //     pub fn new(
+    //         module: &'ll Module,
+    //         signals: Vec<Signal>,
+    //         probes: HashMap<SignalRef, Vec<String>>,
+    //         scope: Scope,
+    //         insts: Vec<Mutex<Instance<'ll>>>,
+    //     ) -> State<'ll> {
+    //         State {
+    //             module: module,
+    //             context: ModuleContext::new(module),
+    //             time: Time::new(zero(), zero(), zero()),
+    //             signals,
+    //             probes,
+    //             scope,
+    //             insts,
+    //             events: BinaryHeap::new(),
+    //             timed: BinaryHeap::new(),
+    //         }
+    //     }
 
-    /// Get the module whose state this object holds.
-    pub fn module(&self) -> &'tm Module {
-        self.module
-    }
+    //     /// Get the module whose state this object holds.
+    //     pub fn module(&self) -> &'ll Module {
+    //         self.module
+    //     }
 
-    /// Get the module context for the module whose state this object holds
-    pub fn context(&self) -> &ModuleContext {
-        &self.context
-    }
+    //     /// Get the module context for the module whose state this object holds
+    //     pub fn context(&self) -> &ModuleContext {
+    //         &self.context
+    //     }
 
-    /// Get the current simulation time.
-    pub fn time(&self) -> &ConstTime {
-        &self.time
-    }
+    //     /// Get the current simulation time.
+    //     pub fn time(&self) -> &Time {
+    //         &self.time
+    //     }
 
-    /// Change the current simulation time.
-    pub fn set_time(&mut self, time: ConstTime) {
-        self.time = time
-    }
+    //     /// Change the current simulation time.
+    //     pub fn set_time(&mut self, time: Time) {
+    //         self.time = time
+    //     }
 
-    /// Get a slice of instances in the state.
-    pub fn instances(&self) -> &[Mutex<Instance<'tm>>] {
-        &self.insts
-    }
+    //     /// Get a slice of instances in the state.
+    //     pub fn instances(&self) -> &[Mutex<Instance<'ll>>] {
+    //         &self.insts
+    //     }
 
-    /// Get a mutable slice of instances in the state.
-    pub fn instances_mut(&mut self) -> &mut [Mutex<Instance<'tm>>] {
-        &mut self.insts
-    }
+    //     /// Get a mutable slice of instances in the state.
+    //     pub fn instances_mut(&mut self) -> &mut [Mutex<Instance<'ll>>] {
+    //         &mut self.insts
+    //     }
 
-    /// Get a reference to an instance in the state.
-    pub fn instance(&self, ir: InstanceRef) -> &Mutex<Instance<'tm>> {
-        &self.insts[ir.0]
-    }
+    //     /// Get a reference to an instance in the state.
+    //     pub fn instance(&self, ir: InstanceRef) -> &Mutex<Instance<'ll>> {
+    //         &self.insts[ir.0]
+    //     }
 
-    /// Obtain a reference to one of the state's signals.
-    pub fn signal(&self, sr: SignalRef) -> &Signal {
-        &self.signals[sr.0]
-    }
+    // /// Obtain a reference to one of the state's signals.
+    // pub fn signal(&self, sr: SignalRef) -> &Signal {
+    //     &self.signals[sr.0]
+    // }
 
-    /// Obtain a mutable reference to one of the state's signals.
-    pub fn signal_mut(&mut self, sr: SignalRef) -> &mut Signal {
-        &mut self.signals[sr.0]
-    }
+    // /// Obtain a mutable reference to one of the state's signals.
+    // pub fn signal_mut(&mut self, sr: SignalRef) -> &mut Signal {
+    //     &mut self.signals[sr.0]
+    // }
 
-    /// Get a reference to all signals of this state.
-    pub fn signals(&self) -> &[Signal] {
-        &self.signals
-    }
+    //     /// Get a reference to all signals of this state.
+    //     pub fn signals(&self) -> &[Signal] {
+    //         &self.signals
+    //     }
 
-    /// Get a map of all probe signals and the corresponding names.
-    pub fn probes(&self) -> &HashMap<SignalRef, Vec<String>> {
-        &self.probes
-    }
+    //     /// Get a map of all probe signals and the corresponding names.
+    //     pub fn probes(&self) -> &HashMap<SignalRef, Vec<String>> {
+    //         &self.probes
+    //     }
 
-    /// Get the root scope of the design.
-    pub fn scope(&self) -> &Scope {
-        &self.scope
-    }
+    //     /// Get the root scope of the design.
+    //     pub fn scope(&self) -> &Scope {
+    //         &self.scope
+    //     }
 
     /// Add a set of events to the schedule.
     pub fn schedule_events<I>(&mut self, iter: I)
@@ -110,8 +124,25 @@ impl<'tm> State<'tm> {
         I: Iterator<Item = Event>,
     {
         let time = self.time.clone();
+        let probes = self.probes.clone();
         self.events.extend(iter.map(|i| {
-            assert!(i.time > time);
+            assert!(i.time >= time);
+            trace!(
+                "Schedule {} signal {} = {}",
+                i.time,
+                i.signal
+                    .slices
+                    .iter()
+                    .map(|s| {
+                        let sig = s.target.unwrap_signal();
+                        probes
+                            .get(&sig)
+                            .map(|n| n[0].clone())
+                            .unwrap_or_else(|| format!("{:?}", sig))
+                    })
+                    .collect::<String>(),
+                i.value
+            );
             i
         }));
     }
@@ -123,7 +154,8 @@ impl<'tm> State<'tm> {
     {
         let time = self.time.clone();
         self.timed.extend(iter.map(|i| {
-            assert!(i.time > time);
+            assert!(i.time >= time);
+            trace!("Schedule {} instance {:?}", i.time, i.inst);
             i
         }));
     }
@@ -159,7 +191,7 @@ impl<'tm> State<'tm> {
     /// Determine the time of the next simulation step. This is the lowest time
     /// value of any event or wake up request in the schedule. If both the event
     /// and timed instances queue are empty, None is returned.
-    pub fn next_time(&self) -> Option<ConstTime> {
+    pub fn next_time(&self) -> Option<Time> {
         use std::cmp::min;
         match (
             self.events.peek().map(|e| &e.time),
@@ -173,7 +205,36 @@ impl<'tm> State<'tm> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
+impl Index<SignalRef> for State<'_> {
+    type Output = Signal;
+
+    fn index(&self, idx: SignalRef) -> &Self::Output {
+        &self.signals[idx.0]
+    }
+}
+
+impl IndexMut<SignalRef> for State<'_> {
+    fn index_mut(&mut self, idx: SignalRef) -> &mut Self::Output {
+        &mut self.signals[idx.0]
+    }
+}
+
+impl<'ll> Index<InstanceRef> for State<'ll> {
+    type Output = Mutex<Instance<'ll>>;
+
+    fn index(&self, idx: InstanceRef) -> &Self::Output {
+        &self.insts[idx.0]
+    }
+}
+
+impl IndexMut<InstanceRef> for State<'_> {
+    fn index_mut(&mut self, idx: InstanceRef) -> &mut Self::Output {
+        &mut self.insts[idx.0]
+    }
+}
+
+/// A unique handle to a signal in a simulation state.
+#[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct SignalRef(usize);
 
 impl SignalRef {
@@ -188,14 +249,21 @@ impl SignalRef {
     }
 }
 
+impl fmt::Debug for SignalRef {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "s{}", self.0)
+    }
+}
+
+/// A signal in a simulation state.
 pub struct Signal {
-    ty: Type,
-    value: ValueRef,
+    ty: llhd::Type,
+    value: Value,
 }
 
 impl Signal {
     /// Create a new signal.
-    pub fn new(ty: Type, value: ValueRef) -> Signal {
+    pub fn new(ty: llhd::Type, value: Value) -> Signal {
         Signal {
             ty: ty,
             value: value,
@@ -203,18 +271,18 @@ impl Signal {
     }
 
     /// Get the signal's type.
-    pub fn ty(&self) -> &Type {
+    pub fn ty(&self) -> &llhd::Type {
         &self.ty
     }
 
     /// Get the signal's current value.
-    pub fn value(&self) -> &ValueRef {
+    pub fn value(&self) -> &Value {
         &self.value
     }
 
     /// Change the signal's current value. Returns whether the values were
     /// identical.
-    pub fn set_value(&mut self, value: ValueRef) -> bool {
+    pub fn set_value(&mut self, value: Value) -> bool {
         if self.value != value {
             self.value = value;
             true
@@ -224,78 +292,79 @@ impl Signal {
     }
 }
 
-pub struct Instance<'tm> {
-    values: HashMap<ValueId, ValueSlot>,
-    kind: InstanceKind<'tm>,
-    state: InstanceState,
-    inputs: Vec<SignalRef>,
-    outputs: Vec<SignalRef>,
+/// An instance of a process or entity.
+pub struct Instance<'ll> {
+    pub values: HashMap<llhd::ir::Value, ValueSlot>,
+    pub kind: InstanceKind<'ll>,
+    pub state: InstanceState,
+    pub inputs: Vec<SignalRef>,
+    pub outputs: Vec<SignalRef>,
 }
 
-impl<'tm> Instance<'tm> {
-    pub fn new(
-        values: HashMap<ValueId, ValueSlot>,
-        kind: InstanceKind<'tm>,
-        inputs: Vec<SignalRef>,
-        outputs: Vec<SignalRef>,
-    ) -> Instance<'tm> {
-        Instance {
-            values: values,
-            kind: kind,
-            state: InstanceState::Ready,
-            inputs: inputs,
-            outputs: outputs,
-        }
-    }
+impl<'ll> Instance<'ll> {
+    //     pub fn new(
+    //         values: HashMap<llhd::ir::Value, ValueSlot>,
+    //         kind: InstanceKind<'ll>,
+    //         inputs: Vec<SignalRef>,
+    //         outputs: Vec<SignalRef>,
+    //     ) -> Instance<'ll> {
+    //         Instance {
+    //             values: values,
+    //             kind: kind,
+    //             state: InstanceState::Ready,
+    //             inputs: inputs,
+    //             outputs: outputs,
+    //         }
+    //     }
 
-    /// Get the instance's current state.
-    pub fn state(&self) -> &InstanceState {
-        &self.state
-    }
+    //     /// Get the instance's current state.
+    //     pub fn state(&self) -> &InstanceState {
+    //         &self.state
+    //     }
 
-    /// Change the instance's current state.
-    pub fn set_state(&mut self, state: InstanceState) {
-        self.state = state;
-    }
+    //     /// Change the instance's current state.
+    //     pub fn set_state(&mut self, state: InstanceState) {
+    //         self.state = state;
+    //     }
 
-    pub fn kind(&self) -> &InstanceKind<'tm> {
-        &self.kind
-    }
+    //     pub fn kind(&self) -> &InstanceKind<'ll> {
+    //         &self.kind
+    //     }
 
-    pub fn kind_mut(&mut self) -> &mut InstanceKind<'tm> {
-        &mut self.kind
-    }
+    //     pub fn kind_mut(&mut self) -> &mut InstanceKind<'ll> {
+    //         &mut self.kind
+    //     }
 
-    /// Get a reference to the value table of this instance.
-    pub fn values(&self) -> &HashMap<ValueId, ValueSlot> {
-        &self.values
-    }
+    //     /// Get a reference to the value table of this instance.
+    //     pub fn values(&self) -> &HashMap<llhd::ir::Value, ValueSlot> {
+    //         &self.values
+    //     }
 
     /// Access an entry in this instance's value table.
-    pub fn value(&self, id: ValueId) -> &ValueSlot {
+    pub fn value(&self, id: llhd::ir::Value) -> &ValueSlot {
         self.values.get(&id).unwrap()
     }
 
     /// Change an entry in this instance's value table.
-    pub fn set_value(&mut self, id: ValueId, value: ValueSlot) {
+    pub fn set_value(&mut self, id: llhd::ir::Value, value: ValueSlot) {
         self.values.insert(id, value);
     }
 
-    /// Get a slice of the instance's input signals.
-    pub fn inputs(&self) -> &[SignalRef] {
-        &self.inputs
-    }
+    //     /// Get a slice of the instance's input signals.
+    //     pub fn inputs(&self) -> &[SignalRef] {
+    //         &self.inputs
+    //     }
 
-    /// Get a slice of the instance's output signals.
-    pub fn outputs(&self) -> &[SignalRef] {
-        &self.outputs
-    }
+    //     /// Get a slice of the instance's output signals.
+    //     pub fn outputs(&self) -> &[SignalRef] {
+    //         &self.outputs
+    //     }
 
     /// Get the name of the entity or process.
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> String {
         match self.kind {
-            InstanceKind::Process { prok, .. } => prok.name(),
-            InstanceKind::Entity { entity, .. } => entity.name(),
+            InstanceKind::Process { prok, .. } => prok.name().to_string(),
+            InstanceKind::Entity { entity, .. } => entity.name().to_string(),
         }
     }
 }
@@ -309,13 +378,13 @@ pub enum ValueSlot {
     /// A signal.
     Signal(SignalRef),
     /// A variable with its current value.
-    Variable(ValueRef),
+    Variable(Value),
     /// A constant value.
-    Const(ValueRef),
+    Const(Value),
     /// A pointer to a variable.
-    VariablePointer(ValuePointer<ValueId>),
+    VariablePointer(ValuePointer),
     /// A pointer to a signal.
-    SignalPointer(ValuePointer<SignalRef>),
+    SignalPointer(ValuePointer),
 }
 
 /// A pointer to a value.
@@ -323,41 +392,110 @@ pub enum ValueSlot {
 /// A `ValuePointer` represents a variable or signal that is either referenced
 /// in its entirety, or by selecting a subset of its elements, bits, or fields.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ValuePointer<T> {
+pub struct ValuePointer {
     /// The targeted variable or signal.
-    pub target: T,
+    pub target: ValueTarget,
     /// The associated selection into the target.
     pub select: Vec<ValueSelect>,
     /// The discarded portions to the left and right of the assigned value.
     pub discard: (usize, usize),
+    /// The pointer slices.
+    pub slices: Vec<ValueSlice>,
+}
+
+impl ValuePointer {
+    /// Compute the width of the pointed at value.
+    ///
+    /// Returns 0 if it is a struct.
+    pub fn width(&self) -> usize {
+        self.slices.iter().map(|s| s.width).sum()
+    }
+
+    /// Get an iterator over the slices which tracks slice offsets.
+    pub fn offset_slices(&self) -> impl Iterator<Item = (usize, &ValueSlice)> {
+        let mut i = 0;
+        self.slices.iter().map(move |s| {
+            let v = i;
+            i += s.width;
+            (v, s)
+        })
+    }
+}
+
+/// A slice of a pointer.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ValueSlice {
+    /// The targeted value, variable, or signal.
+    pub target: ValueTarget,
+    /// The selection into the target.
+    pub select: Vec<ValueSelect>,
+    /// The width of this slice, or 0 if it is a struct.
+    pub width: usize,
+}
+
+/// A pointer target.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ValueTarget {
+    Value(llhd::ir::Value),
+    Variable(llhd::ir::Value),
+    Signal(SignalRef),
+}
+
+impl ValueTarget {
+    /// Unwrap the underlying value, or panic.
+    pub fn unwrap_value(&self) -> llhd::ir::Value {
+        match *self {
+            ValueTarget::Value(v) => v,
+            _ => panic!("value target is not a value"),
+        }
+    }
+
+    /// Unwrap the underlying variable, or panic.
+    pub fn unwrap_variable(&self) -> llhd::ir::Value {
+        match *self {
+            ValueTarget::Variable(v) => v,
+            _ => panic!("value target is not a variable"),
+        }
+    }
+
+    /// Unwrap the underlying signal, or panic.
+    pub fn unwrap_signal(&self) -> SignalRef {
+        match *self {
+            ValueTarget::Signal(v) => v,
+            _ => panic!("value target is not a signal"),
+        }
+    }
 }
 
 /// A selection of a part of a value.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ValueSelect {
-    /// An individual array element, struct field, or integer bit.
-    Element(usize),
+    /// An individual array element or struct field.
+    Field(usize),
     /// A slice of array elements or integer bits, given by `(offset, length)`.
     Slice(usize, usize),
 }
 
-pub enum InstanceKind<'tm> {
+/// An instantiation.
+pub enum InstanceKind<'ll> {
     Process {
-        prok: &'tm Process,
-        next_block: Option<&'tm Block>,
+        prok: &'ll llhd::ir::Process,
+        next_block: Option<llhd::ir::Block>,
     },
     Entity {
-        entity: &'tm Entity,
+        entity: &'ll llhd::ir::Entity,
     },
 }
 
+/// The state an instance can be in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstanceState {
     Ready,
-    Wait(Option<ConstTime>, Vec<SignalRef>),
+    Wait(Option<Time>, Vec<SignalRef>),
     Done,
 }
 
+/// A unique reference to an instance in the simulation.
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct InstanceRef(usize);
 
@@ -373,9 +511,9 @@ impl InstanceRef {
 /// lowest time value.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Event {
-    pub time: ConstTime,
-    pub signal: ValuePointer<SignalRef>,
-    pub value: ValueRef,
+    pub time: Time,
+    pub signal: ValuePointer,
+    pub value: Value,
 }
 
 impl Ord for Event {
@@ -401,7 +539,7 @@ impl PartialOrd for Event {
 /// time value.
 #[derive(Debug, Eq, PartialEq)]
 pub struct TimedInstance {
-    pub time: ConstTime,
+    pub time: Time,
     pub inst: InstanceRef,
 }
 
@@ -421,7 +559,7 @@ impl PartialOrd for TimedInstance {
     }
 }
 
-/// A level of hierarchy level.
+/// A level of hierarchy.
 ///
 /// The scope represents the hierarchy of a design. Each instantiation or
 /// process creates a new subscope with its own set of probes.

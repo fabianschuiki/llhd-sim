@@ -2,9 +2,13 @@
 
 //! A simulation tracer that can store the generated waveform to disk.
 
-use crate::state::{Scope, SignalRef, State};
-use llhd::{AggregateKind, ConstKind, ValueRef};
-use num::{BigInt, BigRational};
+#![allow(unused_imports)]
+
+use crate::{
+    state::{Scope, SignalRef, State},
+    value::Value,
+};
+use num::{traits::Pow, BigInt, BigRational, FromPrimitive, One};
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -33,26 +37,28 @@ impl Tracer for NoopTracer {
 }
 
 /// A tracer that emits the simulation trace as VCD.
-pub struct VcdTracer<'tw> {
-    writer: RefCell<&'tw mut std::io::Write>,
+pub struct VcdTracer<'a, T> {
+    writer: RefCell<&'a mut T>,
     abbrevs: HashMap<SignalRef, Vec<(String, String, usize)>>,
     time: BigRational,
-    pending: HashMap<SignalRef, ValueRef>,
+    pending: HashMap<SignalRef, Value>,
     precision: BigRational,
 }
 
-impl<'tw> VcdTracer<'tw> {
+impl<'a, T> VcdTracer<'a, T>
+where
+    T: std::io::Write,
+{
     /// Create a new VCD tracer which will write its VCD to `writer`.
-    pub fn new(writer: &'tw mut std::io::Write) -> VcdTracer {
-        use num::zero;
+    pub fn new(writer: &'a mut T) -> Self {
         VcdTracer {
             writer: RefCell::new(writer),
             abbrevs: HashMap::new(),
-            time: zero(),
+            time: num::zero(),
             pending: HashMap::new(),
             // Hard-code the precision to ps for now. Later on, we might want to
             // make this configurable or automatically determined by the module.
-            precision: BigInt::parse_bytes(b"1000000000000", 10).unwrap().into(), // ps
+            precision: BigInt::from_usize(10).unwrap().pow(12usize).into(), // ps
         }
     }
 
@@ -71,39 +77,36 @@ impl<'tw> VcdTracer<'tw> {
     /// Write the value of a signal. Called at the beginning of the simulation
     /// to perform a variable dump, and during flush once for each signal that
     /// changed.
-    fn flush_signal(&self, signal: SignalRef, offset: usize, value: &ValueRef, abbrev: &str) {
-        match *value {
-            ValueRef::Const(ref k) => match **k {
-                ConstKind::Int(ref k) => {
-                    assert_eq!(offset, 0);
-                    write!(self.writer.borrow_mut(), "b{:b} {}\n", k.value(), abbrev).unwrap();
-                }
-                ConstKind::Time(_) => panic!("time not supported in VCD"),
-            },
-            ValueRef::Aggregate(ref a) => match **a {
-                AggregateKind::Array(ref a) => {
-                    let elems = a.elements();
-                    self.flush_signal(
-                        signal,
-                        offset / elems.len(),
-                        &elems[offset % elems.len()],
-                        abbrev,
-                    );
-                }
-                AggregateKind::Struct(ref a) => {
-                    let fields = a.fields();
-                    self.flush_signal(
-                        signal,
-                        offset / fields.len(),
-                        &fields[offset % fields.len()],
-                        abbrev,
-                    );
-                }
-            },
-            _ => panic!(
-                "flush non-const/non-aggregate signal {:?} with value {:?}",
-                signal, value
-            ),
+    fn flush_signal(&self, signal: SignalRef, offset: usize, value: &Value, abbrev: &str) {
+        match value {
+            Value::Void => (),
+            Value::Int(v) => {
+                assert_eq!(offset, 0);
+                write!(self.writer.borrow_mut(), "b{:b} {}\n", v.value, abbrev).unwrap();
+            }
+            Value::Time(_) => (),
+            Value::Array(v) => {
+                let elems = &v.0;
+                self.flush_signal(
+                    signal,
+                    offset / elems.len(),
+                    &elems[offset % elems.len()],
+                    abbrev,
+                );
+            }
+            Value::Struct(v) => {
+                let fields = &v.0;
+                self.flush_signal(
+                    signal,
+                    offset / fields.len(),
+                    &fields[offset % fields.len()],
+                    abbrev,
+                );
+            }
+            // _ => panic!(
+            //     "flush non-const/non-aggregate signal {:?} with value {:?}",
+            //     signal, value
+            // ),
         };
     }
 
@@ -112,14 +115,22 @@ impl<'tw> VcdTracer<'tw> {
         write!(
             self.writer.borrow_mut(),
             "$scope module {} $end\n",
-            scope.name
+            scope.name.replace('.', "_")
         )
         .unwrap();
         let mut probed_signals: Vec<_> = scope.probes.keys().cloned().collect();
         probed_signals.sort();
         for sigref in probed_signals {
             for name in &scope.probes[&sigref] {
-                self.prepare_signal(state, sigref, state.signal(sigref).ty(), name, index, 0, 1);
+                self.prepare_signal(
+                    state,
+                    sigref,
+                    state[sigref].ty().unwrap_signal(),
+                    name,
+                    index,
+                    0,
+                    1,
+                );
             }
         }
         for subscope in scope.subscopes.iter() {
@@ -142,7 +153,6 @@ impl<'tw> VcdTracer<'tw> {
         match **ty {
             llhd::IntType(width) => {
                 // Allocate short name for the probed signal.
-                debug!("prepare_signal {:?} {:?} {}", sigref, name, offset);
                 let mut idx = *index;
                 let mut abbrev = String::new();
                 loop {
@@ -192,24 +202,35 @@ impl<'tw> VcdTracer<'tw> {
                     );
                 }
             }
+            // _ => (),
             ref x => panic!("signal of type {} not supported in VCD", x),
         }
     }
 }
 
-impl<'tw> Tracer for VcdTracer<'tw> {
+impl<'a, T> Tracer for VcdTracer<'a, T>
+where
+    T: std::io::Write,
+{
     fn init(&mut self, state: &State) {
         // Dump the VCD header.
-        write!(self.writer.borrow_mut(), "$version\nllhd-sim\n$end\n").unwrap();
+        write!(
+            self.writer.borrow_mut(),
+            "$version\nllhd-sim {}\n$end\n",
+            clap::crate_version!()
+        )
+        .unwrap();
         write!(self.writer.borrow_mut(), "$timescale 1ps $end\n").unwrap();
-        self.prepare_scope(state, state.scope(), &mut 0);
+        self.prepare_scope(state, &state.scope, &mut 0);
         write!(self.writer.borrow_mut(), "$enddefinitions $end\n").unwrap();
 
         // Dump the variables.
         write!(self.writer.borrow_mut(), "$dumpvars\n").unwrap();
-        for &signal in state.probes().keys() {
-            for &(ref abbrev, _, offset) in &self.abbrevs[&signal] {
-                self.flush_signal(signal, offset, state.signal(signal).value(), abbrev);
+        for &signal in state.probes.keys() {
+            if let Some(abbrevs) = self.abbrevs.get(&signal) {
+                for &(ref abbrev, _, offset) in abbrevs {
+                    self.flush_signal(signal, offset, state[signal].value(), abbrev);
+                }
             }
         }
         write!(self.writer.borrow_mut(), "$end\n").unwrap();
@@ -218,16 +239,16 @@ impl<'tw> Tracer for VcdTracer<'tw> {
     fn step(&mut self, state: &State, changed: &HashSet<SignalRef>) {
         // If the physical time in seconds of the simulation changed, flush the
         // aggregated pending changes and update the time.
-        if self.time != *state.time().time() {
+        if self.time != *state.time.time() {
             self.flush();
-            self.time = state.time().time().clone();
+            self.time = state.time.time().clone();
         }
 
         // Mark the changed signals for consideration during the next flush.
         self.pending.extend(
             changed
                 .iter()
-                .map(|&signal| (signal, state.signal(signal).value().clone())),
+                .map(|&signal| (signal, state[signal].value().clone())),
         );
     }
 

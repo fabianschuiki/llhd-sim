@@ -1,4 +1,9 @@
 // Copyright (c) 2017-2019 Fabian Schuiki
+
+//! The LLHD reference simulator
+
+#![deny(missing_docs)]
+
 #[macro_use]
 extern crate log;
 
@@ -6,14 +11,13 @@ use anyhow::{anyhow, Context, Result};
 use clap::{App, Arg};
 use std::{fs::File, io::prelude::*};
 
-// pub mod builder;
-// pub mod state;
-// pub mod worker;
-// pub mod engine;
-// pub mod tracer;
+mod builder;
+mod engine;
+mod state;
+mod tracer;
+pub mod value;
 
-// use crate::engine::Engine;
-// use crate::tracer::{Tracer, VcdTracer};
+use crate::tracer::Tracer;
 
 fn main() -> Result<()> {
     // Parse the command line arguments.
@@ -32,6 +36,14 @@ fn main() -> Result<()> {
                 .short("s")
                 .long("sequential")
                 .help("Disable parallelization"),
+        )
+        .arg(
+            Arg::with_name("OUTPUT")
+                .short("o")
+                .long("output")
+                .takes_value(true)
+                .required(true)
+                .help("Trace into an output file"),
         )
         .arg(
             Arg::with_name("INPUT")
@@ -69,24 +81,28 @@ fn main() -> Result<()> {
             .finish()
             .map_err(|e| anyhow!("{}", e))
             .with_context(|| format!("failed to verify input from {}", path))?;
+
+        module
     };
 
-    // // Build the simulation state for this module.
-    // let mut state = builder::build(&module);
+    // Build the simulation state for this module.
+    let mut state = builder::build(&module).with_context(|| "failed to initialize simulation")?;
 
-    // // Create a new tracer for this state that will generate some waveforms.
-    // let mut file = File::create("/tmp/output.vcd").unwrap();
-    // let mut tracer = VcdTracer::new(&mut file);
-    // tracer.init(&state);
+    // Create a new tracer for this state that will generate some waveforms.
+    let tracer_path = matches.value_of("OUTPUT").unwrap();
+    let mut file = File::create(tracer_path)
+        .with_context(|| format!("failed to create output at {}", tracer_path))?;
+    let mut tracer = tracer::VcdTracer::new(&mut file);
+    tracer.init(&state);
 
-    // // Create the simulation engine and run the simulation to completion.
-    // {
-    //     let mut engine = Engine::new(&mut state, !matches.is_present("sequential"));
-    //     engine.run(&mut tracer);
-    // }
+    // Create the simulation engine and run the simulation to completion.
+    {
+        let mut engine = engine::Engine::new(&mut state, !matches.is_present("sequential"));
+        engine.run(&mut tracer);
+    }
 
-    // // Flush the tracer.
-    // tracer.finish(&state);
+    // Flush the tracer.
+    tracer.finish(&state);
 
     Ok(())
 }
