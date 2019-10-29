@@ -19,6 +19,7 @@ use num::{BigInt, BigUint, One, ToPrimitive};
 use rayon::prelude::*;
 use std::{
     borrow::BorrowMut,
+    collections::VecDeque,
     collections::{HashMap, HashSet},
 };
 
@@ -48,6 +49,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
     /// when the simulation is finished.
     pub fn step(&mut self, tracer: &mut dyn Tracer) -> bool {
         println!("STEP {}: {}", self.step, self.state.time);
+        let first = self.step == 0;
         self.step += 1;
 
         // Apply events at this time, note changed signals.
@@ -121,7 +123,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                 .par_iter()
                 .map(|&index| {
                     let mut lk = self.state.insts[index].lock().unwrap();
-                    self.step_instance(lk.borrow_mut())
+                    self.step_instance(lk.borrow_mut(), &changed_signals, first)
                 })
                 .reduce(
                     || Vec::new(),
@@ -134,7 +136,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
             let mut events = Vec::new();
             for &index in &ready_insts {
                 let mut lk = self.state.insts[index].lock().unwrap();
-                events.extend(self.step_instance(lk.borrow_mut()));
+                events.extend(self.step_instance(lk.borrow_mut(), &changed_signals, first));
             }
             events
         };
@@ -174,81 +176,20 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
 
     /// Continue execution of one single process or entity instance, until it is
     /// suspended by an instruction.
-    fn step_instance(&self, instance: &mut Instance) -> Vec<Event> {
+    fn step_instance(
+        &self,
+        instance: &mut Instance,
+        changed_signals: &HashSet<SignalRef>,
+        first: bool,
+    ) -> Vec<Event> {
         match instance.kind {
             InstanceKind::Process { prok, next_block } => {
                 self.step_process(instance, prok, next_block)
-                // trace!("[{}] step process {}", self.state.time, prok.name());
-                // let ctx = ProcessContext::new(self.state.context(), prok);
-                // let mut events = Vec::new();
-                // // println!("stepping process {}, block {:?}", prok.name(), next_block.map(|b| b.name()));
-                // while let Some(block) = next_block {
-                //     next_block = None;
-                //     for inst in block.insts(&ctx) {
-                //         let action =
-                //             self.execute_instruction(inst, instance.values(), self.state.signals());
-                //         match action {
-                //             Action::None => (),
-                //             Action::Value(vs) => instance.set_value(inst.as_ref().into(), vs),
-                //             Action::Store(ptr, v) => {
-                //                 let current = match instance.value(ptr.target) {
-                //                     ValueSlot::Variable(k) => k,
-                //                     x => panic!("variable targeted by store action has value {:?} instead of Variable(...)", x),
-                //                 };
-                //                 let new = modify_pointed_value(&ptr, current, v);
-                //                 instance.set_value(ptr.target, ValueSlot::Variable(new));
-                //             }
-                //             Action::Event(e) => events.push(e),
-                //             Action::Jump(blk) => {
-                //                 let blk = prok.body().block(blk);
-                //                 // println!("jump to block {:?}", blk.name());
-                //                 next_block = Some(blk);
-                //                 break;
-                //             }
-                //             Action::Suspend(blk, st) => {
-                //                 let blk = blk.map(|br| prok.body().block(br));
-                //                 instance.set_state(st);
-                //                 match *instance.kind_mut() {
-                //                     InstanceKind::Process {
-                //                         ref mut next_block, ..
-                //                     } => *next_block = blk,
-                //                     _ => unreachable!(),
-                //                 }
-                //                 return events;
-                //             }
-                //         }
-                //     }
-                // }
-
-                // // We should never arrive here, since every block ends with a
-                // // terminator instruction that redirects control flow.
-                // panic!("process starved of instructions");
             }
             InstanceKind::Entity { entity } => {
-                self.step_entity(instance, entity)
-                // trace!("[{}] step entity {}", self.state.time, entity.name());
-                // //         // let ctx = EntityContext::new(self.state.context(), entity);
-                // let mut events = Vec::new();
-                // for inst in entity.insts() {
-                //     let action =
-                //         self.execute_instruction(inst, instance.values(), self.state.signals());
-                //     match action {
-                //         Action::None => (),
-                //         Action::Value(vs) => instance.set_value(inst.as_ref().into(), vs),
-                //         Action::Store(ptr, vs) => panic!("cannot store in entity"),
-                //         Action::Event(e) => events.push(e),
-                //         Action::Jump(..) => panic!("cannot jump in entity"),
-                //         Action::Suspend(..) => panic!("cannot suspend entity"),
-                //     }
-                // }
-                // let inputs = instance.inputs().iter().cloned();
-                // let outputs = instance.outputs().iter().cloned();
-                // let sensitivity = inputs.chain(outputs).collect();
-                // instance.set_state(InstanceState::Wait(None, sensitivity));
-                // events
+                self.step_entity(instance, entity, changed_signals, first)
             }
         }
-        // vec![]
     }
 
     /// Continue execution of one single process until it is suspended by an
@@ -297,18 +238,6 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                             debug!("{:?} <- {}", var, modified);
                             instance.set_value(var, ValueSlot::Variable(modified));
                         }
-
-                        // let var = ptr.target.unwrap_variable();
-                        // let current = match instance.value(var) {
-                        //     ValueSlot::Variable(ref k) => k,
-                        //     x => panic!(
-                        //         "variable targeted by store action has value \
-                        //          {:?} instead of Variable(...)",
-                        //         x
-                        //     ),
-                        // };
-                        // let new = modify_pointed_value(&ptr, current, v);
-                        // instance.set_value(var, ValueSlot::Variable(new));
                     }
                     Action::Event(e) => {
                         // debug!("Enqueue {:?}", e);
@@ -339,32 +268,97 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
     }
 
     /// Continue execution of one single entity.
-    fn step_entity(&self, instance: &mut Instance, unit: &impl llhd::ir::Unit) -> Vec<Event> {
+    fn step_entity(
+        &self,
+        instance: &mut Instance,
+        unit: &impl llhd::ir::Unit,
+        changed_signals: &HashSet<SignalRef>,
+        first: bool,
+    ) -> Vec<Event> {
         trace!("[{}] step entity {}", self.state.time, unit.name());
+        let dfg = unit.dfg();
         let mut events = Vec::new();
+
+        // First collect the probe instructions that react to the changed
+        // signals. This will be the root of the data flow update.
+        trace!("Collecting triggered instructions");
+        let mut dirty = VecDeque::new();
+        let mut dirty_set = HashSet::new();
+        let mut local_signals = Vec::new();
         for inst in unit.inst_layout().insts() {
+            if first {
+                dirty.push_back(inst);
+                dirty_set.insert(inst);
+            }
+            if dfg[inst].opcode() != Opcode::Sig {
+                continue;
+            }
+            if let ValueSlot::Signal(sig) = instance.values[&dfg.inst_result(inst)] {
+                local_signals.push(sig);
+                if !changed_signals.contains(&sig) {
+                    // trace!("  Skipping {} ({:?})", inst.dump(dfg), sig);
+                    continue;
+                }
+                trace!("  Trigering {} ({:?})", inst.dump(dfg), sig);
+                for (inst, _) in dfg.uses(dfg.inst_result(inst)) {
+                    match dfg[inst].opcode() {
+                        Opcode::Drv | Opcode::Inst | Opcode::Sig => continue,
+                        _ => (),
+                    }
+                    trace!("    -> {}", inst.dump(dfg));
+                    if !dirty_set.contains(&inst) {
+                        dirty.push_back(inst);
+                        dirty_set.insert(inst);
+                    }
+                }
+            }
+        }
+        trace!("  Dirty: {:?}", dirty);
+
+        // Work the set of dirty instructions. Grab an instruction from the set
+        // and execute it. If the action causes a value change, add dependent
+        // instructions to the set.
+        while let Some(inst) = dirty.pop_front() {
+            dirty_set.remove(&inst);
             let action =
                 self.execute_instruction(inst, unit, &instance.values, &self.state.signals);
             match action {
                 Action::None => (),
                 Action::Value(vs) => {
-                    let v = unit.dfg().inst_result(inst);
+                    let v = dfg.inst_result(inst);
                     trace!("{} = {:?}", v, vs);
-                    instance.set_value(v, vs)
+                    let changed = instance.values.get(&v).map(|v| v != &vs).unwrap_or(true);
+                    instance.set_value(v, vs);
+                    if changed {
+                        for (inst, _) in dfg.uses(v) {
+                            if !dirty_set.contains(&inst) {
+                                trace!("  -> triggering {}", inst.dump(dfg));
+                                dirty.push_back(inst);
+                                dirty_set.insert(inst);
+                            }
+                        }
+                    }
                 }
                 Action::Store(ptr, vs) => panic!("cannot store in entity"),
-                Action::Event(e) => {
-                    // debug!("Enqueue {:?}", e);
-                    events.push(e)
-                }
+                Action::Event(e) => events.push(e),
                 Action::Jump(..) => panic!("cannot jump in entity"),
                 Action::Suspend(..) => panic!("cannot suspend entity"),
             }
         }
-        let inputs = instance.inputs.iter().cloned();
-        let outputs = instance.outputs.iter().cloned();
-        let sensitivity = inputs.chain(outputs).collect();
+
+        // Suspend entity execution until any of the input and output signals
+        // change.
+        // TODO(fschuiki): Shouldn't this also be sensitive to changes in local
+        // signals?
+        let sensitivity = instance
+            .inputs
+            .iter()
+            .cloned()
+            .chain(instance.outputs.iter().cloned())
+            .chain(local_signals.into_iter())
+            .collect();
         instance.state = InstanceState::Wait(None, sensitivity);
+
         events
     }
 

@@ -56,7 +56,7 @@ fn main() -> Result<()> {
     // Configure the logger.
     stderrlog::new()
         .quiet(!matches.is_present("verbosity"))
-        .verbosity(matches.occurrences_of("verbosity") as usize + 1)
+        .verbosity(matches.occurrences_of("verbosity") as usize)
         .init()
         .unwrap();
 

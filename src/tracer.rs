@@ -27,14 +27,14 @@ pub trait Tracer {
     fn finish(&mut self, state: &State);
 }
 
-/// A no-op tracer that does nothing.
-pub struct NoopTracer;
+// /// A no-op tracer that does nothing.
+// pub struct NoopTracer;
 
-impl Tracer for NoopTracer {
-    fn init(&mut self, _: &State) {}
-    fn step(&mut self, _: &State, _: &HashSet<SignalRef>) {}
-    fn finish(&mut self, _: &State) {}
-}
+// impl Tracer for NoopTracer {
+//     fn init(&mut self, _: &State) {}
+//     fn step(&mut self, _: &State, _: &HashSet<SignalRef>) {}
+//     fn finish(&mut self, _: &State) {}
+// }
 
 /// A tracer that emits the simulation trace as VCD.
 pub struct VcdTracer<'a, T> {

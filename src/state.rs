@@ -373,7 +373,7 @@ impl<'ll> Instance<'ll> {
 ///
 /// Slots are assigned to each entity in the LLHD graph that may carry a value.
 /// Execution of instructions change the value slots.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValueSlot {
     /// A signal.
     Signal(SignalRef),
@@ -442,13 +442,13 @@ pub enum ValueTarget {
 }
 
 impl ValueTarget {
-    /// Unwrap the underlying value, or panic.
-    pub fn unwrap_value(&self) -> llhd::ir::Value {
-        match *self {
-            ValueTarget::Value(v) => v,
-            _ => panic!("value target is not a value"),
-        }
-    }
+    // /// Unwrap the underlying value, or panic.
+    // pub fn unwrap_value(&self) -> llhd::ir::Value {
+    //     match *self {
+    //         ValueTarget::Value(v) => v,
+    //         _ => panic!("value target is not a value"),
+    //     }
+    // }
 
     /// Unwrap the underlying variable, or panic.
     pub fn unwrap_variable(&self) -> llhd::ir::Value {
