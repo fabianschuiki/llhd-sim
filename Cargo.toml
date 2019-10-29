@@ -17,6 +17,6 @@ llhd = "0.9"
 clap = "2.24.2"
 num = "0.2"
 rayon = "1.2"
-log = "0.4"
+log = { version = "0.4", features = ["release_max_level_warn"] }
 stderrlog = "0.4"
 anyhow = "1"
