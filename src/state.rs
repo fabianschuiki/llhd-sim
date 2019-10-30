@@ -130,7 +130,7 @@ impl<'ll> State<'ll> {
             debug!(
                 "Schedule {} <- {}  [@ {}]",
                 i.signal
-                    .slices
+                    .0
                     .iter()
                     .map(|s| {
                         let sig = s.target.unwrap_signal();
@@ -380,20 +380,51 @@ pub enum ValueSlot {
     SignalPointer(ValuePointer),
 }
 
+impl fmt::Display for ValueSlot {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ValueSlot::Signal(v) => fmt::Debug::fmt(v, f),
+            ValueSlot::Variable(v) => fmt::Display::fmt(v, f),
+            ValueSlot::Const(v) => fmt::Display::fmt(v, f),
+            ValueSlot::VariablePointer(v) => fmt::Display::fmt(v, f),
+            ValueSlot::SignalPointer(v) => fmt::Display::fmt(v, f),
+        }
+    }
+}
+
 /// A pointer to a value.
 ///
 /// A `ValuePointer` represents a variable or signal that is either referenced
 /// in its entirety, or by selecting a subset of its elements, bits, or fields.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ValuePointer {
-    /// The targeted variable or signal.
-    pub target: ValueTarget,
-    /// The associated selection into the target.
-    pub select: Vec<ValueSelect>,
-    /// The discarded portions to the left and right of the assigned value.
-    pub discard: (usize, usize),
-    /// The pointer slices.
-    pub slices: Vec<ValueSlice>,
+pub struct ValuePointer(pub Vec<ValueSlice>);
+
+impl fmt::Display for ValuePointer {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let single = self.0.len() == 1;
+        if !single {
+            write!(f, "[")?;
+        }
+        let mut first = true;
+        for s in &self.0 {
+            if f.alternate() && !single {
+                write!(f, "\n    ")?;
+            } else if !first {
+                write!(f, ", ")?;
+            }
+            write!(f, "{}", s)?;
+            first = false;
+        }
+        if !single {
+            if f.alternate() {
+                write!(f, "\n]")
+            } else {
+                write!(f, "]")
+            }
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl ValuePointer {
@@ -401,13 +432,13 @@ impl ValuePointer {
     ///
     /// Returns 0 if it is a struct.
     pub fn width(&self) -> usize {
-        self.slices.iter().map(|s| s.width).sum()
+        self.0.iter().map(|s| s.width).sum()
     }
 
     /// Get an iterator over the slices which tracks slice offsets.
     pub fn offset_slices(&self) -> impl Iterator<Item = (usize, &ValueSlice)> {
         let mut i = 0;
-        self.slices.iter().map(move |s| {
+        self.0.iter().map(move |s| {
             let v = i;
             i += s.width;
             (v, s)
@@ -426,12 +457,32 @@ pub struct ValueSlice {
     pub width: usize,
 }
 
+impl fmt::Display for ValueSlice {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.target)?;
+        for s in &self.select {
+            write!(f, "{}", s)?;
+        }
+        Ok(())
+    }
+}
+
 /// A pointer target.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ValueTarget {
     Value(llhd::ir::Value),
     Variable(llhd::ir::Value),
     Signal(SignalRef),
+}
+
+impl fmt::Display for ValueTarget {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ValueTarget::Value(v) => write!(f, "{}", v),
+            ValueTarget::Variable(v) => write!(f, "*{}", v),
+            ValueTarget::Signal(v) => write!(f, "${:?}", v),
+        }
+    }
 }
 
 impl ValueTarget {
@@ -467,6 +518,15 @@ pub enum ValueSelect {
     Field(usize),
     /// A slice of array elements or integer bits, given by `(offset, length)`.
     Slice(usize, usize),
+}
+
+impl fmt::Display for ValueSelect {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ValueSelect::Field(i) => write!(f, ".{}", i),
+            ValueSelect::Slice(o, l) => write!(f, "[{}+:{}]", o, l),
+        }
+    }
 }
 
 /// An instantiation.

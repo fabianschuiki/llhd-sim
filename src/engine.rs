@@ -56,7 +56,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
         let mut changed_signals = HashSet::new();
         for (signal, value) in self.state.take_next_events() {
             // Determine the current state of all targeted signals.
-            let signals = signal.slices.iter().map(|s| s.target.unwrap_signal());
+            let signals = signal.0.iter().map(|s| s.target.unwrap_signal());
             let mut modified: Vec<_> = signals
                 .clone()
                 .map(|sig| self.state[sig].value().clone())
@@ -210,7 +210,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                     }
                     Action::Store(ptr, value) => {
                         // Determine the current state of all targeted variables.
-                        let vars = ptr.slices.iter().map(|s| s.target.unwrap_variable());
+                        let vars = ptr.0.iter().map(|s| s.target.unwrap_variable());
                         let mut modified: Vec<_> = vars
                             .clone()
                             .map(|var| match instance.value(var) {
@@ -678,16 +678,11 @@ where
     // Resolve a value to a variable pointer.
     fn resolve_variable_pointer(&self, id: llhd::ir::Value) -> ValuePointer {
         match self.values.get(&id) {
-            Some(ValueSlot::Variable(_)) => ValuePointer {
+            Some(ValueSlot::Variable(_)) => ValuePointer(vec![ValueSlice {
                 target: ValueTarget::Variable(id),
                 select: vec![],
-                discard: (0, 0),
-                slices: vec![ValueSlice {
-                    target: ValueTarget::Variable(id),
-                    select: vec![],
-                    width: self.pointer_width(id),
-                }],
-            },
+                width: self.pointer_width(id),
+            }]),
             Some(ValueSlot::VariablePointer(ref ptr)) => ptr.clone(),
             x => panic!(
                 "expected value {:?} to resolve to a variable pointer, got {:?}",
@@ -699,16 +694,11 @@ where
     // Resolve a value to a signal pointer.
     fn resolve_signal_pointer(&self, id: llhd::ir::Value) -> ValuePointer {
         match self.values.get(&id) {
-            Some(ValueSlot::Signal(sig)) => ValuePointer {
+            Some(ValueSlot::Signal(sig)) => ValuePointer(vec![ValueSlice {
                 target: ValueTarget::Signal(*sig),
                 select: vec![],
-                discard: (0, 0),
-                slices: vec![ValueSlice {
-                    target: ValueTarget::Signal(*sig),
-                    select: vec![],
-                    width: self.pointer_width(id),
-                }],
-            },
+                width: self.pointer_width(id),
+            }]),
             Some(ValueSlot::SignalPointer(ref ptr)) => ptr.clone(),
             x => panic!(
                 "expected value {:?} to resolve to a signal pointer, got {:?}",
@@ -719,16 +709,11 @@ where
 
     // Resolve a value to a value pointer.
     fn resolve_value_pointer(&self, id: llhd::ir::Value) -> ValuePointer {
-        ValuePointer {
+        ValuePointer(vec![ValueSlice {
             target: ValueTarget::Value(id),
             select: vec![],
-            discard: (0, 0),
-            slices: vec![ValueSlice {
-                target: ValueTarget::Value(id),
-                select: vec![],
-                width: self.pointer_width(id),
-            }],
-        }
+            width: self.pointer_width(id),
+        }])
     }
 
     /// Determine the pointer result type.
@@ -789,10 +774,7 @@ where
         trace!("Read pointer as {}; {:?}", ty, ptr);
 
         // Map each slice to its corresponding subresult.
-        let mut results = ptr
-            .slices
-            .iter()
-            .map(|s| (self.read_pointer_slice(s), s.width));
+        let mut results = ptr.0.iter().map(|s| (self.read_pointer_slice(s), s.width));
 
         // Determine the type of the resulting value.
         let inner_ty = match **ty {
@@ -821,7 +803,7 @@ where
                 assert_eq!(values.len(), w);
                 ArrayValue::new(values).into()
             }
-            _ if ptr.slices.len() == 1 => results.next().unwrap().0,
+            _ if ptr.0.len() == 1 => results.next().unwrap().0,
             _ => panic!("multi-slice concat on {}", ty),
         }
     }
@@ -946,12 +928,7 @@ where
             })
             .collect();
 
-        let p = ValuePointer {
-            target: base.target, // DUMMY
-            select: vec![],      // DUMMY
-            discard: (0, 0),     // DUMMY
-            slices,
-        };
+        let p = ValuePointer(slices);
 
         trace!("Shfited pointer:");
         for (offset, slice) in p.offset_slices() {
@@ -999,12 +976,7 @@ where
                             _ => 0,
                         };
                         s.select.push(ValueSelect::Field(field - offset));
-                        return ValuePointer {
-                            target: target.target, // DUMMY
-                            select: vec![],        // DUMMY
-                            discard: (0, 0),       // DUMMY
-                            slices: vec![s],
-                        };
+                        return ValuePointer(vec![s]);
                     }
                 }
                 panic!("field {} out of bounds in {:?}", field, target);
@@ -1049,12 +1021,7 @@ where
                         slices.push(s);
                     }
                 }
-                ValuePointer {
-                    target: target.target, // DUMMY
-                    select: vec![],        // DUMMY
-                    discard: (0, 0),       // DUMMY
-                    slices,
-                }
+                ValuePointer(slices)
             }
 
             _ => panic!("{} is not an insert/extract op", op),
@@ -1088,9 +1055,7 @@ impl std::fmt::Display for Action {
         match *self {
             Action::None => write!(f, "<no action>"),
             Action::Value(ref v) => write!(f, "= {:?}", v),
-            Action::Store(ref ptr, ref v) => {
-                write!(f, "*i{} = {:?}", ptr.target.unwrap_variable(), v)
-            }
+            Action::Store(ref ptr, ref v) => write!(f, "*{:?} = {:?}", ptr, v),
             Action::Event(ref ev) => write!(f, "@{} {:?} <= {:?}", ev.time, ev.signal, ev.value),
             Action::Jump(..) | Action::Suspend(..) => write!(f, "{:?}", self),
         }
