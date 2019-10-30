@@ -53,9 +53,8 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
         self.step += 1;
 
         // Apply events at this time, note changed signals.
-        let events = self.state.take_next_events();
         let mut changed_signals = HashSet::new();
-        for Event { signal, value, .. } in events {
+        for (signal, value) in self.state.take_next_events() {
             // Determine the current state of all targeted signals.
             let signals = signal.slices.iter().map(|s| s.target.unwrap_signal());
             let mut modified: Vec<_> = signals
@@ -80,14 +79,8 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
         }
 
         // Wake up units whose timed wait has run out.
-        let timed = self.state.take_next_timed();
-        for TimedInstance { inst, .. } in timed {
-            // println!("timed wake up of {:?}", inst);
-            debug!(
-                "[{}] wakeup (time) {}",
-                self.state.time,
-                self.state[inst].lock().unwrap().name(),
-            );
+        for inst in self.state.take_next_timed() {
+            debug!("Wakeup {} (time)", self.state[inst].lock().unwrap().name(),);
             self.state[inst].lock().unwrap().state = InstanceState::Ready;
         }
 

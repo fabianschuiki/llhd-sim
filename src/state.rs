@@ -4,12 +4,12 @@
 
 #![allow(unused_imports)]
 
-use crate::value::{Time, Value};
+use crate::value::{TimeValue, Value};
 use llhd::ir::Unit;
 use num::zero;
 use std::{
     cmp::Ordering,
-    collections::{BinaryHeap, HashMap},
+    collections::{BTreeMap, BinaryHeap, HashMap, HashSet},
     fmt,
     ops::{Index, IndexMut},
     sync::Mutex,
@@ -28,12 +28,12 @@ pub struct State<'ll> {
     /// The process and entity instances in the simulation.
     pub insts: Vec<Mutex<Instance<'ll>>>,
     /// The current simulation time.
-    pub time: Time,
+    pub time: TimeValue,
 
     /// The current state of the event queue.
-    pub events: BinaryHeap<Event>,
+    pub events: BTreeMap<TimeValue, HashMap<ValuePointer, Value>>,
     /// The current wakeup queue for instances.
-    pub timed: BinaryHeap<TimedInstance>,
+    pub timed: BTreeMap<TimeValue, HashSet<InstanceRef>>,
 }
 
 impl<'ll> State<'ll> {
@@ -48,7 +48,7 @@ impl<'ll> State<'ll> {
     //         State {
     //             module: module,
     //             context: ModuleContext::new(module),
-    //             time: Time::new(zero(), zero(), zero()),
+    //             time: TimeValue::new(zero(), zero(), zero()),
     //             signals,
     //             probes,
     //             scope,
@@ -69,12 +69,12 @@ impl<'ll> State<'ll> {
     //     }
 
     //     /// Get the current simulation time.
-    //     pub fn time(&self) -> &Time {
+    //     pub fn time(&self) -> &TimeValue {
     //         &self.time
     //     }
 
     //     /// Change the current simulation time.
-    //     pub fn set_time(&mut self, time: Time) {
+    //     pub fn set_time(&mut self, time: TimeValue) {
     //         self.time = time
     //     }
 
@@ -125,11 +125,10 @@ impl<'ll> State<'ll> {
     {
         let time = self.time.clone();
         let probes = self.probes.clone();
-        self.events.extend(iter.map(|i| {
+        for i in iter {
             assert!(i.time >= time);
-            trace!(
-                "Schedule {} signal {} = {}",
-                i.time,
+            debug!(
+                "Schedule {} <- {}  [@ {}]",
                 i.signal
                     .slices
                     .iter()
@@ -141,10 +140,14 @@ impl<'ll> State<'ll> {
                             .unwrap_or_else(|| format!("{:?}", sig))
                     })
                     .collect::<String>(),
-                i.value
+                i.value,
+                i.time,
             );
-            i
-        }));
+            self.events
+                .entry(i.time)
+                .or_insert_with(Default::default)
+                .insert(i.signal, i.value);
+        }
     }
 
     /// Add a set of timed instances to the schedule.
@@ -153,50 +156,40 @@ impl<'ll> State<'ll> {
         I: Iterator<Item = TimedInstance>,
     {
         let time = self.time.clone();
-        self.timed.extend(iter.map(|i| {
+        for i in iter {
             assert!(i.time >= time);
-            trace!("Schedule {} instance {:?}", i.time, i.inst);
-            i
-        }));
+            debug!("Schedule {:?}  [@ {}]", i.inst, i.time);
+            self.timed
+                .entry(i.time)
+                .or_insert_with(Default::default)
+                .insert(i.inst);
+        }
     }
 
     /// Dequeue all events due at the current time.
-    pub fn take_next_events(&mut self) -> Vec<Event> {
-        let mut v = Vec::new();
-        while self
-            .events
-            .peek()
-            .map(|x| x.time == self.time)
-            .unwrap_or(false)
-        {
-            v.push(self.events.pop().unwrap());
+    pub fn take_next_events(&mut self) -> impl Iterator<Item = (ValuePointer, Value)> {
+        if let Some(x) = self.events.remove(&self.time) {
+            x.into_iter()
+        } else {
+            HashMap::new().into_iter()
         }
-        v
     }
 
     /// Dequeue all timed instances due at the current time.
-    pub fn take_next_timed(&mut self) -> Vec<TimedInstance> {
-        let mut v = Vec::new();
-        while self
-            .timed
-            .peek()
-            .map(|x| x.time == self.time)
-            .unwrap_or(false)
-        {
-            v.push(self.timed.pop().unwrap());
+    pub fn take_next_timed(&mut self) -> impl Iterator<Item = InstanceRef> {
+        if let Some(x) = self.timed.remove(&self.time) {
+            x.into_iter()
+        } else {
+            HashSet::new().into_iter()
         }
-        v
     }
 
     /// Determine the time of the next simulation step. This is the lowest time
     /// value of any event or wake up request in the schedule. If both the event
     /// and timed instances queue are empty, None is returned.
-    pub fn next_time(&self) -> Option<Time> {
+    pub fn next_time(&self) -> Option<TimeValue> {
         use std::cmp::min;
-        match (
-            self.events.peek().map(|e| &e.time),
-            self.timed.peek().map(|t| &t.time),
-        ) {
+        match (self.events.keys().next(), self.timed.keys().next()) {
             (Some(e), Some(t)) => Some(min(e, t).clone()),
             (Some(e), None) => Some(e.clone()),
             (None, Some(t)) => Some(t.clone()),
@@ -391,7 +384,7 @@ pub enum ValueSlot {
 ///
 /// A `ValuePointer` represents a variable or signal that is either referenced
 /// in its entirety, or by selecting a subset of its elements, bits, or fields.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ValuePointer {
     /// The targeted variable or signal.
     pub target: ValueTarget,
@@ -423,7 +416,7 @@ impl ValuePointer {
 }
 
 /// A slice of a pointer.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ValueSlice {
     /// The targeted value, variable, or signal.
     pub target: ValueTarget,
@@ -434,7 +427,7 @@ pub struct ValueSlice {
 }
 
 /// A pointer target.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ValueTarget {
     Value(llhd::ir::Value),
     Variable(llhd::ir::Value),
@@ -468,7 +461,7 @@ impl ValueTarget {
 }
 
 /// A selection of a part of a value.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ValueSelect {
     /// An individual array element or struct field.
     Field(usize),
@@ -491,7 +484,7 @@ pub enum InstanceKind<'ll> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstanceState {
     Ready,
-    Wait(Option<Time>, Vec<SignalRef>),
+    Wait(Option<TimeValue>, Vec<SignalRef>),
     Done,
 }
 
@@ -511,7 +504,7 @@ impl InstanceRef {
 /// lowest time value.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Event {
-    pub time: Time,
+    pub time: TimeValue,
     pub signal: ValuePointer,
     pub value: Value,
 }
@@ -539,7 +532,7 @@ impl PartialOrd for Event {
 /// time value.
 #[derive(Debug, Eq, PartialEq)]
 pub struct TimedInstance {
-    pub time: Time,
+    pub time: TimeValue,
     pub inst: InstanceRef,
 }
 
