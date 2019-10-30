@@ -134,7 +134,6 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
             .filter(|&(_, u)| u.lock().unwrap().state == InstanceState::Ready)
             .map(|(i, _)| i)
             .collect();
-        // println!("ready_insts: {:?}", ready_insts);
         let events = if self.parallelize {
             ready_insts
                 .par_iter()
@@ -793,8 +792,6 @@ where
 
     /// Read the target value of a pointer.
     pub fn read_pointer(&self, ty: &llhd::Type, ptr: &ValuePointer) -> Value {
-        trace!("Read pointer as {}; {:?}", ty, ptr);
-
         // Map each slice to its corresponding subresult.
         let mut results = ptr.0.iter().map(|s| (self.read_pointer_slice(s), s.width));
 
@@ -912,7 +909,6 @@ where
 
         // Create an updated set of pointer slices by fusing the base and hidden
         // pointers according to the slicing and ordering determined above.
-        trace!("Evaluating shift by {}", amount);
         let slices = order
             .flat_map(|(ptr, (off, len))| {
                 ptr.offset_slices().flat_map(move |(slice_offset, slice)| {
@@ -924,16 +920,6 @@ where
                     let actual_off = clamp(off - slice_offset as isize);
                     let actual_end = clamp(off + len - slice_offset as isize);
                     let actual_len = actual_end - actual_off;
-
-                    trace!(
-                        "  {}: {:?} to {},{} (act {},{})",
-                        slice_offset,
-                        slice,
-                        off,
-                        len,
-                        actual_off,
-                        actual_len
-                    );
 
                     // Extract exactly the slice determined above.
                     if actual_off == 0 && actual_len == slice.width {
@@ -950,14 +936,7 @@ where
             })
             .collect();
 
-        let p = ValuePointer(slices);
-
-        trace!("Shfited pointer:");
-        for (offset, slice) in p.offset_slices() {
-            trace!("  {}: {:?}", offset, slice);
-        }
-
-        p
+        ValuePointer(slices)
     }
 
     /// Execute an insert or extract operation.
@@ -1020,16 +999,6 @@ where
                     let actual_end =
                         clamp(offset as isize + length as isize - slice_offset as isize);
                     let actual_len = actual_end - actual_off;
-
-                    trace!(
-                        "  {}: {:?} to {},{} (act {},{})",
-                        slice_offset,
-                        slice,
-                        offset,
-                        length,
-                        actual_off,
-                        actual_len
-                    );
 
                     // Extract exactly the slice determined above.
                     if actual_off == 0 && actual_len == slice.width {
