@@ -226,7 +226,7 @@ impl IntValue {
     pub fn insert_slice(&mut self, off: usize, len: usize, value: &IntValue) {
         assert_eq!(len, value.width);
         let mask = ((BigUint::one() << len) - BigUint::one()) << off;
-        let mask_inv = ((BigUint::one() << self.width) - BigUint::one()) & mask;
+        let mask_inv = ((BigUint::one() << self.width) - BigUint::one()) ^ mask;
         self.value &= mask_inv;
         self.value |= &value.value << off;
     }
