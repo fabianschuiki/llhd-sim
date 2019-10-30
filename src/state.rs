@@ -486,13 +486,14 @@ impl fmt::Display for ValueTarget {
 }
 
 impl ValueTarget {
-    // /// Unwrap the underlying value, or panic.
-    // pub fn unwrap_value(&self) -> llhd::ir::Value {
-    //     match *self {
-    //         ValueTarget::Value(v) => v,
-    //         _ => panic!("value target is not a value"),
-    //     }
-    // }
+    /// Unwrap the underlying value, or panic.
+    #[allow(dead_code)]
+    pub fn unwrap_value(&self) -> llhd::ir::Value {
+        match *self {
+            ValueTarget::Value(v) => v,
+            _ => panic!("value target is not a value"),
+        }
+    }
 
     /// Unwrap the underlying variable, or panic.
     pub fn unwrap_variable(&self) -> llhd::ir::Value {
