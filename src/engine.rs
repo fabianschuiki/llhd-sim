@@ -277,23 +277,20 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
         trace!("Collecting triggered instructions");
         let mut dirty = VecDeque::new();
         let mut dirty_set = HashSet::new();
-        let mut local_signals = Vec::new();
-        for inst in unit.inst_layout().insts() {
-            if first {
+        if first {
+            for inst in unit.inst_layout().insts() {
                 dirty.push_back(inst);
                 dirty_set.insert(inst);
             }
-            if dfg[inst].opcode() != Opcode::Sig {
-                continue;
-            }
-            if let ValueSlot::Signal(sig) = instance.values[&dfg.inst_result(inst)] {
-                local_signals.push(sig);
-                if !changed_signals.contains(&sig) {
-                    // trace!("  Skipping {} ({:?})", inst.dump(dfg), sig);
-                    continue;
-                }
-                trace!("  Trigering {} ({:?})", inst.dump(dfg), sig);
-                for (inst, _) in dfg.uses(dfg.inst_result(inst)) {
+        } else {
+            for sig in instance
+                .signals
+                .iter()
+                .filter(|sig| changed_signals.contains(sig))
+            {
+                let value = instance.signal_values[&sig];
+                trace!("  Triggering {} ({})", self.state.probes[&sig][0], value);
+                for (inst, _) in dfg.uses(value) {
                     match dfg[inst].opcode() {
                         Opcode::Drv | Opcode::Inst | Opcode::Sig => continue,
                         _ => (),
@@ -306,7 +303,6 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                 }
             }
         }
-        trace!("  Dirty: {:?}", dirty);
 
         // Work the set of dirty instructions. Grab an instruction from the set
         // and execute it. If the action causes a value change, add dependent
@@ -317,22 +313,32 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                 self.execute_instruction(inst, unit, &instance.values, &self.state.signals);
             match action {
                 Action::None => (),
-                Action::Value(vs) => {
+                Action::Value(new) => {
                     let v = dfg.inst_result(inst);
-                    trace!("{} = {:?}", v, vs);
-                    let changed = instance.values.get(&v).map(|v| v != &vs).unwrap_or(true);
-                    instance.set_value(v, vs);
+                    trace!("%{} = {}", v, new);
+                    let changed = instance
+                        .values
+                        .get(&v)
+                        .map(|old| match old {
+                            // Check actual values for a change.
+                            ValueSlot::Const(_) => old != &new,
+                            // Everything else is always considered changed,
+                            // especially pointers.
+                            _ => true,
+                        })
+                        .unwrap_or(true);
+                    instance.set_value(v, new);
                     if changed {
                         for (inst, _) in dfg.uses(v) {
                             if !dirty_set.contains(&inst) {
-                                trace!("  -> triggering {}", inst.dump(dfg));
+                                // trace!("  -> triggering {}", inst.dump(dfg));
                                 dirty.push_back(inst);
                                 dirty_set.insert(inst);
                             }
                         }
                     }
                 }
-                Action::Store(ptr, vs) => panic!("cannot store in entity"),
+                Action::Store(ptr, new) => panic!("cannot store in entity"),
                 Action::Event(e) => events.push(e),
                 Action::Jump(..) => panic!("cannot jump in entity"),
                 Action::Suspend(..) => panic!("cannot suspend entity"),
@@ -341,16 +347,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
 
         // Suspend entity execution until any of the input and output signals
         // change.
-        // TODO(fschuiki): Shouldn't this also be sensitive to changes in local
-        // signals?
-        let sensitivity = instance
-            .inputs
-            .iter()
-            .cloned()
-            .chain(instance.outputs.iter().cloned())
-            .chain(local_signals.into_iter())
-            .collect();
-        instance.state = InstanceState::Wait(None, sensitivity);
+        instance.state = InstanceState::Wait(None, instance.signals.clone());
 
         events
     }

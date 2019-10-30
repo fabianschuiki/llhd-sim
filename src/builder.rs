@@ -75,7 +75,7 @@ impl<'ll> Builder<'ll> {
         &mut self,
         mod_unit: llhd::ir::ModUnit,
         unit: &impl llhd::ir::Unit,
-        mut inputs: Vec<SignalRef>,
+        inputs: Vec<SignalRef>,
         outputs: Vec<SignalRef>,
     ) {
         debug!("Instantiating {}", unit.name());
@@ -95,6 +95,10 @@ impl<'ll> Builder<'ll> {
             })
             .collect();
 
+        // Make a list of signals that this instance is sensitive to.
+        let mut signals = inputs;
+        signals.extend(outputs);
+
         // Gather the process-/entity-specific information.
         let kind = if let Some(prok) = self.module.get_process(mod_unit) {
             // Allocate signals.
@@ -104,7 +108,7 @@ impl<'ll> Builder<'ll> {
                         let value = dfg.inst_result(inst);
                         let init = self.const_value(dfg, dfg[inst].args()[0]);
                         let sig = self.alloc_signal(dfg.value_type(value), init);
-                        inputs.push(sig); // entity is re-evaluated when this signal changes
+                        signals.push(sig); // entity is re-evaluated when this signal changes
                         if let Some(name) = dfg.get_name(value) {
                             self.alloc_signal_probe(sig, name.to_string());
                         }
@@ -131,7 +135,7 @@ impl<'ll> Builder<'ll> {
                     let value = dfg.inst_result(inst);
                     let init = self.const_value(dfg, dfg[inst].args()[0]);
                     let sig = self.alloc_signal(dfg.value_type(value), init);
-                    inputs.push(sig); // entity is re-evaluated when this signal changes
+                    signals.push(sig); // entity is re-evaluated when this signal changes
                     if let Some(name) = dfg.get_name(value) {
                         self.alloc_signal_probe(sig, name.to_string());
                     }
@@ -172,13 +176,23 @@ impl<'ll> Builder<'ll> {
             unreachable!()
         };
 
+        // Create a mapping from signals to the values which correspond to them.
+        // This resolves signals to arguments or `sig` instructions.
+        let signal_values: HashMap<SignalRef, llhd::ir::Value> = values
+            .iter()
+            .flat_map(|(&v, s)| match s {
+                &ValueSlot::Signal(s) => Some((s, v)),
+                _ => None,
+            })
+            .collect();
+
         // Create the unit instance.
         self.insts.push(Instance {
             values,
             kind,
             state: InstanceState::Ready,
-            inputs,
-            outputs,
+            signals,
+            signal_values,
         })
     }
 

@@ -290,8 +290,8 @@ pub struct Instance<'ll> {
     pub values: HashMap<llhd::ir::Value, ValueSlot>,
     pub kind: InstanceKind<'ll>,
     pub state: InstanceState,
-    pub inputs: Vec<SignalRef>,
-    pub outputs: Vec<SignalRef>,
+    pub signals: Vec<SignalRef>,
+    pub signal_values: HashMap<SignalRef, llhd::ir::Value>,
 }
 
 impl<'ll> Instance<'ll> {
