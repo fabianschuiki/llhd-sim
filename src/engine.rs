@@ -27,6 +27,7 @@ pub struct Engine<'ts, 'tm: 'ts> {
     step: usize,
     state: &'ts mut State<'tm>,
     parallelize: bool,
+    last_heartbeat: std::time::SystemTime,
 }
 
 impl<'ts, 'tm> Engine<'ts, 'tm> {
@@ -36,19 +37,39 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
             step: 0,
             state,
             parallelize,
+            last_heartbeat: std::time::UNIX_EPOCH,
         }
     }
 
     /// Run the simulation to completion.
     pub fn run(&mut self, tracer: &mut dyn Tracer) {
         while self.step(tracer) {}
+        println!(
+            "\rSimulating -- {} (#{})\x1b[0K",
+            self.state.time, self.step
+        );
     }
 
     /// Perform one simulation step. Returns true if there are remaining events
     /// in the queue, false otherwise. This can be used as an indication as to
     /// when the simulation is finished.
     pub fn step(&mut self, tracer: &mut dyn Tracer) -> bool {
-        println!("STEP {}: {}", self.step, self.state.time);
+        info!("STEP {}: {}", self.step, self.state.time);
+        let now = std::time::SystemTime::now();
+        if now
+            .duration_since(self.last_heartbeat)
+            .map(|x| x.as_millis())
+            .unwrap_or(0)
+            > 250
+        {
+            use std::io::Write;
+            print!(
+                "\rSimulating -- {} (#{})\x1b[0K",
+                self.state.time, self.step
+            );
+            let _ = std::io::stdout().flush();
+            self.last_heartbeat = now;
+        }
         let first = self.step == 0;
         self.step += 1;
 
@@ -61,6 +82,9 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                 .clone()
                 .map(|sig| self.state[sig].value().clone())
                 .collect();
+            for sig in signals.clone() {
+                trace!("Event: {}", self.state.probes[&sig][0]);
+            }
 
             // Modify the signals.
             let old = modified.clone();
@@ -71,7 +95,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                 if self.state[sig].set_value(modified.clone()) {
                     changed_signals.insert(sig);
                     debug!(
-                        "changed: {:?} {} -> {}",
+                        "Change {} {} -> {}",
                         self.state.probes[&sig][0], old, modified
                     );
                 }
@@ -93,7 +117,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                 false
             };
             if trigger {
-                debug!("[{}] wakeup (sense) {}", self.state.time, inst.name(),);
+                debug!("Wakeup {} (sense)", inst.name());
                 inst.state = InstanceState::Ready;
             }
         }
@@ -193,7 +217,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
         unit: &impl llhd::ir::Unit,
         block: Option<llhd::ir::Block>,
     ) -> Vec<Event> {
-        trace!("[{}] step process {}", self.state.time, unit.name());
+        debug!("Step process {}", unit.name());
         let mut events = Vec::new();
         let mut next_block = block;
         while let Some(block) = next_block {
@@ -205,7 +229,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                     Action::None => (),
                     Action::Value(vs) => {
                         let v = unit.dfg().inst_result(inst);
-                        trace!("{} = {:?}", v, vs);
+                        trace!("{} = {}", v, vs);
                         instance.set_value(v, vs)
                     }
                     Action::Store(ptr, value) => {
@@ -228,7 +252,6 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
 
                         // Store the modified state back.
                         for (var, modified) in vars.zip(modified.into_iter()) {
-                            debug!("{:?} <- {}", var, modified);
                             instance.set_value(var, ValueSlot::Variable(modified));
                         }
                     }
@@ -241,7 +264,6 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
                         break;
                     }
                     Action::Suspend(blk, st) => {
-                        debug!("Suspend {} {:?}", instance.name(), st);
                         instance.state = st;
                         match instance.kind {
                             InstanceKind::Process {
@@ -268,7 +290,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
         changed_signals: &HashSet<SignalRef>,
         first: bool,
     ) -> Vec<Event> {
-        trace!("[{}] step entity {}", self.state.time, unit.name());
+        debug!("Step entity {}", unit.name());
         let dfg = unit.dfg();
         let mut events = Vec::new();
 
