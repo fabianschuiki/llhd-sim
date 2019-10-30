@@ -474,19 +474,7 @@ where
             Opcode::Var => Action::Value(ValueSlot::Variable(self.resolve_value(data.args()[0]))),
             Opcode::Ld => {
                 let ptr = self.resolve_variable_pointer(data.args()[0]);
-                if !ptr.select.is_empty() {
-                    warn!(
-                        "select {:?} ignored for load {}",
-                        ptr.select,
-                        inst.dump(dfg)
-                    );
-                }
-                // TODO(fschuiki): Use the new RMW scheme here.
-                let value = match self.values[&ptr.target.unwrap_variable()] {
-                    ValueSlot::Variable(ref k) => ValueSlot::Const(k.clone()),
-                    _ => panic!("load target {:?} did not resolve to a variable value", ptr),
-                };
-                Action::Value(value)
+                Action::Value(ValueSlot::Const(self.read_pointer(&ty, &ptr)))
             }
             Opcode::St => {
                 let ptr = self.resolve_variable_pointer(data.args()[0]);
@@ -497,10 +485,8 @@ where
             // Signals are simply ignored, as they are handled by the builder.
             Opcode::Sig => Action::None,
             Opcode::Prb => {
-                let sig = self.resolve_signal(data.args()[0]);
-                Action::Value(ValueSlot::Const(
-                    self.signals[sig.as_usize()].value().clone(),
-                ))
+                let sig = self.resolve_signal_pointer(data.args()[0]);
+                Action::Value(ValueSlot::Const(self.read_pointer(&ty, &sig)))
             }
             Opcode::Drv => {
                 let delay = self.resolve_delay(data.args()[2]);
