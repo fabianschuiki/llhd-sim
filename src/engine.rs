@@ -42,8 +42,12 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
     }
 
     /// Run the simulation to completion.
-    pub fn run(&mut self, tracer: &mut dyn Tracer) {
-        while self.step(tracer) {}
+    pub fn run(&mut self, tracer: &mut dyn Tracer, until_step: Option<usize>) {
+        if let Some(until_step) = until_step {
+            while self.step < until_step && self.step(tracer) {}
+        } else {
+            while self.step(tracer) {}
+        }
         println!(
             "\rSimulating -- {} (#{})\x1b[0K",
             self.state.time, self.step
@@ -92,7 +96,7 @@ impl<'ts, 'tm> Engine<'ts, 'tm> {
 
             // Store the modified state back.
             for ((sig, modified), old) in signals.zip(modified.into_iter()).zip(old.into_iter()) {
-                if self.state[sig].set_value(modified.clone()) {
+                if self.state[sig].set_value(modified.clone()) && modified != old {
                     changed_signals.insert(sig);
                     debug!(
                         "Change {} {} -> {}",

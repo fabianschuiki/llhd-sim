@@ -7,6 +7,7 @@
 #[macro_use]
 extern crate log;
 
+use crate::tracer::Tracer;
 use anyhow::{anyhow, Context, Result};
 use clap::{App, Arg};
 use std::{fs::File, io::prelude::*};
@@ -14,10 +15,8 @@ use std::{fs::File, io::prelude::*};
 mod builder;
 mod engine;
 mod state;
-mod tracer;
+pub mod tracer;
 pub mod value;
-
-use crate::tracer::Tracer;
 
 fn main() -> Result<()> {
     // Parse the command line arguments.
@@ -50,6 +49,12 @@ fn main() -> Result<()> {
                 .help("The input file to simulate")
                 .required(true)
                 .index(1),
+        )
+        .arg(
+            Arg::with_name("num-steps")
+                .short("s")
+                .takes_value(true)
+                .help("Terminate after a fixed number of steps"),
         )
         .get_matches();
 
@@ -92,13 +97,25 @@ fn main() -> Result<()> {
     let tracer_path = matches.value_of("OUTPUT").unwrap();
     let mut file = File::create(tracer_path)
         .with_context(|| format!("failed to create output at {}", tracer_path))?;
-    let mut tracer = tracer::VcdTracer::new(&mut file);
+    let mut tracer: Box<dyn Tracer> = if tracer_path.ends_with(".vcd") {
+        Box::new(tracer::VcdTracer::new(&mut file))
+    } else if tracer_path.ends_with(".dump") {
+        Box::new(tracer::DumpTracer::new(&mut file))
+    } else {
+        return Err(anyhow!(
+            "Cannot determine output format from file name `{}`",
+            tracer_path
+        ));
+    };
     tracer.init(&state);
 
     // Create the simulation engine and run the simulation to completion.
     {
+        let step_limit = matches
+            .value_of("num-steps")
+            .map(|s| s.parse::<usize>().unwrap());
         let mut engine = engine::Engine::new(&mut state, !matches.is_present("sequential"));
-        engine.run(&mut tracer);
+        engine.run(&mut *tracer, step_limit);
     }
 
     // Flush the tracer.

@@ -1,40 +1,17 @@
-// Copyright (c) 2017 Fabian Schuiki
+// Copyright (c) 2017-2020 Fabian Schuiki
 
-//! A simulation tracer that can store the generated waveform to disk.
-
-#![allow(unused_imports)]
+//! A Value Change Dump tracer.
 
 use crate::{
     state::{Scope, SignalRef, State},
+    tracer::Tracer,
     value::Value,
 };
-use num::{traits::Pow, BigInt, BigRational, FromPrimitive, One};
+use num::{traits::Pow, BigInt, BigRational, FromPrimitive};
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
 };
-
-/// A simulation tracer that can operate on the simulation trace as it is being
-/// generated.
-pub trait Tracer {
-    /// Called once at the beginning of the simulation.
-    fn init(&mut self, state: &State);
-
-    /// Called by the simulation engine after each time step.
-    fn step(&mut self, state: &State, changed: &HashSet<SignalRef>);
-
-    /// Called once at the end of the simulation.
-    fn finish(&mut self, state: &State);
-}
-
-// /// A no-op tracer that does nothing.
-// pub struct NoopTracer;
-
-// impl Tracer for NoopTracer {
-//     fn init(&mut self, _: &State) {}
-//     fn step(&mut self, _: &State, _: &HashSet<SignalRef>) {}
-//     fn finish(&mut self, _: &State) {}
-// }
 
 /// A tracer that emits the simulation trace as VCD.
 pub struct VcdTracer<'a, T> {
