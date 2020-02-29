@@ -14,18 +14,18 @@ use std::{
 };
 
 /// A tracer that emits the simulation trace as a human-readable change dump.
-pub struct DumpTracer<'a, T> {
-    writer: &'a mut T,
+pub struct DumpTracer<T> {
+    writer: T,
     precision: BigRational,
     signals: HashMap<SignalRef, String>,
 }
 
-impl<'a, T> DumpTracer<'a, T>
+impl<T> DumpTracer<T>
 where
     T: std::io::Write,
 {
     /// Create a new VCD tracer which will write its VCD to `writer`.
-    pub fn new(writer: &'a mut T) -> Self {
+    pub fn new(writer: T) -> Self {
         DumpTracer {
             writer: writer,
             precision: BigInt::from_usize(10).unwrap().pow(12usize).into(), // ps
@@ -76,7 +76,7 @@ where
     }
 }
 
-impl<'a, T> Tracer for DumpTracer<'a, T>
+impl<T> Tracer for DumpTracer<T>
 where
     T: std::io::Write,
 {

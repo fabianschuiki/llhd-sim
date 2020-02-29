@@ -41,7 +41,6 @@ fn main() -> Result<()> {
                 .short("o")
                 .long("output")
                 .takes_value(true)
-                .required(true)
                 .help("Trace into an output file"),
         )
         .arg(
@@ -52,7 +51,7 @@ fn main() -> Result<()> {
         )
         .arg(
             Arg::with_name("num-steps")
-                .short("s")
+                .short("N")
                 .takes_value(true)
                 .help("Terminate after a fixed number of steps"),
         )
@@ -94,18 +93,21 @@ fn main() -> Result<()> {
     let mut state = builder::build(&module).with_context(|| "failed to initialize simulation")?;
 
     // Create a new tracer for this state that will generate some waveforms.
-    let tracer_path = matches.value_of("OUTPUT").unwrap();
-    let mut file = File::create(tracer_path)
-        .with_context(|| format!("failed to create output at {}", tracer_path))?;
-    let mut tracer: Box<dyn Tracer> = if tracer_path.ends_with(".vcd") {
-        Box::new(tracer::VcdTracer::new(&mut file))
-    } else if tracer_path.ends_with(".dump") {
-        Box::new(tracer::DumpTracer::new(&mut file))
+    let mut tracer: Box<dyn Tracer> = if let Some(tracer_path) = matches.value_of("OUTPUT") {
+        let file = File::create(tracer_path)
+            .with_context(|| format!("failed to create output at {}", tracer_path))?;
+        if tracer_path.ends_with(".vcd") {
+            Box::new(tracer::VcdTracer::new(file))
+        } else if tracer_path.ends_with(".dump") {
+            Box::new(tracer::DumpTracer::new(file))
+        } else {
+            return Err(anyhow!(
+                "Cannot determine output format from file name `{}`",
+                tracer_path
+            ));
+        }
     } else {
-        return Err(anyhow!(
-            "Cannot determine output format from file name `{}`",
-            tracer_path
-        ));
+        Box::new(tracer::NullTracer)
     };
     tracer.init(&state);
 

@@ -14,20 +14,20 @@ use std::{
 };
 
 /// A tracer that emits the simulation trace as VCD.
-pub struct VcdTracer<'a, T> {
-    writer: RefCell<&'a mut T>,
+pub struct VcdTracer<T> {
+    writer: RefCell<T>,
     abbrevs: HashMap<SignalRef, Vec<(String, String, usize)>>,
     time: BigRational,
     pending: HashMap<SignalRef, Value>,
     precision: BigRational,
 }
 
-impl<'a, T> VcdTracer<'a, T>
+impl<T> VcdTracer<T>
 where
     T: std::io::Write,
 {
     /// Create a new VCD tracer which will write its VCD to `writer`.
-    pub fn new(writer: &'a mut T) -> Self {
+    pub fn new(writer: T) -> Self {
         VcdTracer {
             writer: RefCell::new(writer),
             abbrevs: HashMap::new(),
@@ -185,7 +185,7 @@ where
     }
 }
 
-impl<'a, T> Tracer for VcdTracer<'a, T>
+impl<T> Tracer for VcdTracer<T>
 where
     T: std::io::Write,
 {

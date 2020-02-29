@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Added
 - Add human-readable change dump.
 - Add `-t` option to simulate until a fixed number of steps have elapsed.
+- Make output file optional.
 
 ### Changed
 - Update llhd to v0.9.0.
