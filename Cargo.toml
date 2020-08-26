@@ -1,13 +1,14 @@
 [package]
 name = "llhd-sim"
-version = "0.3.1"
+version = "0.4.0"
 authors = ["Fabian Schuiki <fschuiki@iis.ee.ethz.ch>"]
 edition = "2018"
 
-description = "The reference simulator for Low Level Hardware Description assembly."
+description = "Deprecated reference simulator for Low Level Hardware Description assembly. Now part of the LLHD crate."
 repository = "https://github.com/fabianschuiki/llhd-sim"
 readme = "README.md"
 license = "Apache-2.0 OR MIT"
+maintenance = { status = "deprecated" }
 
 [badges]
 travis-ci = { repository = "fabianschuiki/llhd-sim", branch = "master" }

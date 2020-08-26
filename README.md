@@ -1,5 +1,9 @@
 # llhd-sim
 
+**Moved:** llhd-sim is now part of the [llhd] repository and crate. This repository will no longer be updated.
+
+---
+
 [![Build Status](https://travis-ci.org/fabianschuiki/llhd-sim.svg?branch=master)](https://travis-ci.org/fabianschuiki/llhd-sim)
 [![Crates.io](https://img.shields.io/crates/v/llhd-sim.svg)](https://crates.io/crates/llhd-sim)
 

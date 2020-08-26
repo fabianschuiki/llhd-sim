@@ -4,12 +4,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
+
+## 0.4.0 - 2020-08-26
 ### Added
 - Add human-readable change dump.
 - Add `-t` option to simulate until a fixed number of steps have elapsed.
 - Make output file optional.
 
 ### Changed
+- Moved the entire codebase into the [llhd](https://github.com/fabianschuiki/llhd) repository.
 - Update llhd to v0.9.0.
 
 ## 0.3.1 - 2019-03-17
